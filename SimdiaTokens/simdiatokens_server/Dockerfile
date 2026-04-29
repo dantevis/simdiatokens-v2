@@ -1,7 +1,7 @@
 # SimdiaTokens Backend — Single-stage build
 # No caching tricks. Just builds the binary directly.
 
-FROM rust:1.78-slim-bookworm
+FROM rust:1.85-slim-bookworm
 
 WORKDIR /app
 
