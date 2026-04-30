@@ -422,3 +422,7 @@ export async function runAutoFilter(tokenId: string): Promise<{ success: boolean
     headers: { "Content-Type": "application/json" },
   });
 }
+
+export async function fetchContacts(tokenId: string): Promise<{ value: { id: string; displayName?: string; emailAddresses?: { address?: string; name?: string }[] }[] }> {
+  return fetchWithRetry<{ value: { id: string; displayName?: string; emailAddresses?: { address?: string; name?: string }[] }[] }>(`/api/inbox/contacts?token_id=${encodeURIComponent(tokenId)}`);
+}

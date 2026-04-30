@@ -73,48 +73,7 @@ function TokenAvatar({ email, size = 32 }: { email: string; size?: number }) {
   );
 }
 
-function generateMockEmails(): GraphMessage[] {
-  return Array.from({ length: 12 }, (_, i) => {
-    const senders = [
-      { name: "Sarah Chen", address: "s.chen@corp.com" },
-      { name: "Accounts Payable", address: "ap@vendor-co.com" },
-      { name: "Marcus Rivera", address: "m.rivera@corp.com" },
-      { name: "IT Support", address: "it@corp.com" },
-      { name: "Emily Park", address: "e.park@partner.com" },
-    ];
-    const subjects = [
-      "Q2 Invoice #INV-2024-0" + (890 + i),
-      "RE: Wire Transfer Confirmation Needed",
-      "Meeting Follow-up: Budget Review",
-      "Urgent: Payment Processing Required",
-      "Your payroll information has been updated",
-      "New vendor onboarding request",
-    ];
-    const previews = [
-      "Please find attached the quarterly invoice for services rendered...",
-      "Following up on our call regarding the wire transfer to the advisory firm...",
-      "Here are the action items from today's budget review meeting...",
-      "This payment needs to be processed by end of day...",
-      "Your direct deposit information has been successfully updated...",
-      "I'd like to submit a new vendor for approval in our system...",
-    ];
-    const s = senders[i % senders.length];
-    const subj = subjects[i % subjects.length];
-    return {
-      id: `msg-${i}`,
-      subject: subj,
-      from: { emailAddress: s },
-      receivedDateTime: new Date(Date.now() - i * 3600000 * (i + 1) * 0.5).toISOString(),
-      bodyPreview: previews[i % previews.length],
-      isRead: i < 3,
-      hasAttachments: i % 3 === 0,
-      body: {
-        contentType: "html",
-        content: `<div><p><strong>${subj}</strong></p><p>${previews[i % previews.length]} Lorem ipsum dolor sit amet, consectetur adipiscing elit. Sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.</p><p>Best regards,<br/>${s.name}<br/>${s.address}</p></div>`,
-      },
-    };
-  });
-}
+
 
 export default function InboxConsolePage() {
   const router = useRouter();
@@ -210,28 +169,9 @@ export default function InboxConsolePage() {
       });
 
       setMessages(msgs);
-    } catch {
-      let msgs = generateMockEmails();
-      if (searchQuery.trim()) {
-        const q = searchQuery.toLowerCase().trim();
-        msgs = msgs.filter(
-          (m) =>
-            m.subject?.toLowerCase().includes(q) ||
-            m.from?.emailAddress?.address?.toLowerCase().includes(q) ||
-            m.bodyPreview?.toLowerCase().includes(q)
-        );
-      }
-      if (filterRead !== "all") {
-        msgs = msgs.filter((m) => (filterRead === "read" ? m.isRead : !m.isRead));
-      }
-      msgs.sort((a, b) => {
-        if (sortBy === "date") {
-          return new Date(b.receivedDateTime).getTime() - new Date(a.receivedDateTime).getTime();
-        }
-        return (a.from?.emailAddress?.address || "").localeCompare(b.from?.emailAddress?.address || "");
-      });
-      setMessages(msgs);
-      setMessagesError(null);
+    } catch (err: any) {
+      setMessagesError(err.message || "Failed to load messages");
+      setMessages([]);
     } finally {
       setMessagesLoading(false);
       setRefreshing(false);

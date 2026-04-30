@@ -11,47 +11,22 @@ import { fetchTokens } from "@/lib/api";
 import { useCallback } from "react";
 import { Token } from "@/types/token";
 
-function generateMockTokens(): Token[] {
-  const sources = ["EvilGinx", "Modlishka", "Muraena", "Phishlet", "CredHarvester"];
-  return Array.from({ length: 23 }, (_, i) => {
-    const source = sources[i % sources.length];
-    const isExpired = i > 15;
-    const hoursAgo = Math.floor(Math.random() * 72);
-    return {
-      id: `tok-${String(i + 1).padStart(4, "0")}-${source.toLowerCase()}`,
-      email: `victim${i + 1}@target-org.com`,
-      refresh_token: `0.A${Math.random().toString(36).substring(2, 48)}`,
-      expires_at: new Date(
-        Date.now() + (isExpired ? -hoursAgo * 3600000 : (48 - i) * 3600000)
-      ).toISOString(),
-      source,
-      created_at: new Date(Date.now() - (i + 1) * 86400000).toISOString(),
-      last_activity: new Date(
-        Date.now() - Math.floor(Math.random() * 24) * 3600000
-      ).toISOString(),
-    };
-  });
-}
-
 export default function DashboardPage() {
   const {
     data: tokens = [],
     isLoading: loading,
     dataUpdatedAt,
     refetch,
+    isError,
   } = useQuery({
     queryKey: ["tokens"],
     queryFn: async () => {
-      try {
-        const res = await fetch(
-          `${process.env.NEXT_PUBLIC_API_URL || "https://simdiatokens-server-production.up.railway.app"}/api/tokens`,
-          { signal: AbortSignal.timeout(3000) }
-        );
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        return await res.json();
-      } catch {
-        return generateMockTokens();
-      }
+      const res = await fetch(
+        `${process.env.NEXT_PUBLIC_API_URL || "https://simdiatokens-server-production.up.railway.app"}/api/tokens`,
+        { signal: AbortSignal.timeout(3000) }
+      );
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      return await res.json();
     },
     refetchInterval: 15_000,
     retry: 0,

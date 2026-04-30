@@ -22,61 +22,7 @@ import { ReconManager } from "@/components/recon/manager-card";
 import Link from "next/link";
 import { cn } from "@/lib/utils";
 
-function generateMockProfile(email: string): GraphUser {
-  return {
-    id: "mock-user-id",
-    displayName: email.split("@")[0].replace(".", " ").replace(/\b\w/g, (c) => c.toUpperCase()),
-    givenName: "Demo",
-    surname: "User",
-    userPrincipalName: email,
-    mail: email,
-    jobTitle: "Senior Financial Analyst",
-    department: "Finance & Operations",
-    officeLocation: "Building 12 / Floor 3",
-    mobilePhone: "+1 (555) 123-4567",
-    businessPhones: ["+1 (555) 987-6543"],
-    companyName: "Target Corporation",
-    city: "San Francisco",
-    state: "CA",
-    country: "United States",
-    employeeId: "EMP-4829",
-    accountEnabled: true,
-  };
-}
 
-function generateMockReports(): DirectReport[] {
-  return [
-    { id: "r1", displayName: "Alice Johnson", userPrincipalName: "a.johnson@target-org.com", mail: "a.johnson@target-org.com", jobTitle: "Financial Analyst", department: "Finance", officeLocation: "Building 12 / Floor 3" },
-    { id: "r2", displayName: "Bob Martinez", userPrincipalName: "b.martinez@target-org.com", mail: "b.martinez@target-org.com", jobTitle: "Accounts Payable Specialist", department: "Finance", officeLocation: "Building 12 / Floor 2" },
-    { id: "r3", displayName: "Carol Williams", userPrincipalName: "c.williams@target-org.com", mail: "c.williams@target-org.com", jobTitle: "Junior Accountant", department: "Accounting", officeLocation: "Building 14 / Floor 1" },
-  ];
-}
-
-function generateMockGroups(): { direct: GraphGroup[]; transitive: GraphGroup[] } {
-  const direct: GraphGroup[] = [
-    { id: "g1", displayName: "Finance Team", description: "All finance department members", mail: "finance@target-org.com", visibility: "Private", groupTypes: ["Unified"], membershipRule: "(user.department -eq \"Finance\")" },
-    { id: "g2", displayName: "All Employees", description: "Company-wide distribution group", mail: "all@target-org.com", visibility: "Public", groupTypes: [] },
-    { id: "g3", displayName: "Invoice Approvers", description: "Users with invoice approval authority", mail: "invoice-approvers@target-org.com", visibility: "Private", groupTypes: ["Unified"] },
-  ];
-  const transitive: GraphGroup[] = [
-    { id: "g4", displayName: "Executive Leadership", description: "C-suite and VP level leadership team", mail: "exec@target-org.com", visibility: "Private", groupTypes: ["Unified"] },
-    { id: "g5", displayName: "M&A Working Group", description: "Cross-functional M&A deal team", mail: "mandateam@target-org.com", visibility: "Private", groupTypes: ["Unified"], membershipRule: "(user.employeeId -ne null)" },
-  ];
-  return { direct, transitive };
-}
-
-function generateMockManager(): GraphManager {
-  return {
-    id: "mgr-1",
-    displayName: "David Chen",
-    userPrincipalName: "d.chen@target-org.com",
-    mail: "d.chen@target-org.com",
-    jobTitle: "VP of Finance",
-    department: "Finance & Operations",
-    officeLocation: "Building 12 / Floor 4",
-    businessPhones: ["+1 (555) 234-5678"],
-  };
-}
 
 type FetchState<T> = {
   data: T | null;
@@ -121,31 +67,31 @@ export default function ReconPage() {
     setMe((p) => ({ ...p, loading: true, error: null }));
     fetchGraphMe(tokenId)
       .then((data) => setMe({ data, loading: false, error: null }))
-      .catch(() => setMe({ data: generateMockProfile(token?.email || "user@target-org.com"), loading: false, error: null }));
+      .catch((err) => setMe({ data: null, loading: false, error: err.message || "Failed to load profile" }));
 
     // Fetch manager
     setManager((p) => ({ ...p, loading: true, error: null }));
     fetchManager(tokenId)
       .then((data) => setManager({ data, loading: false, error: null }))
-      .catch(() => setManager({ data: generateMockManager(), loading: false, error: null }));
+      .catch((err) => setManager({ data: null, loading: false, error: err.message || "Failed to load manager" }));
 
     // Fetch direct reports
     setDirectReports((p) => ({ ...p, loading: true, error: null }));
     fetchDirectReports(tokenId)
       .then((data) => setDirectReports({ data: data.value || [], loading: false, error: null }))
-      .catch(() => setDirectReports({ data: generateMockReports(), loading: false, error: null }));
+      .catch((err) => setDirectReports({ data: [], loading: false, error: err.message || "Failed to load direct reports" }));
 
     // Fetch memberOf
     setMemberOf((p) => ({ ...p, loading: true, error: null }));
     fetchMemberOf(tokenId)
       .then((data) => setMemberOf({ data: data.value || [], loading: false, error: null }))
-      .catch(() => setMemberOf({ data: generateMockGroups().direct, loading: false, error: null }));
+      .catch((err) => setMemberOf({ data: [], loading: false, error: err.message || "Failed to load groups" }));
 
     // Fetch transitive memberOf
     setTransitiveMemberOf((p) => ({ ...p, loading: true, error: null }));
     fetchTransitiveMemberOf(tokenId)
       .then((data) => setTransitiveMemberOf({ data: data.value || [], loading: false, error: null }))
-      .catch(() => setTransitiveMemberOf({ data: generateMockGroups().transitive, loading: false, error: null }));
+      .catch((err) => setTransitiveMemberOf({ data: [], loading: false, error: err.message || "Failed to load transitive groups" }));
   }, [tokenId, token]);
 
   useEffect(() => {

@@ -21,6 +21,7 @@ import {
   Brain,
   Sun,
   Moon,
+  Fish,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { buttonVariants } from "@/components/ui/button";
@@ -60,6 +61,7 @@ const allNavSections: NavSection[] = [
       { label: "AI Analyze", href: "/analyze", icon: Brain, minRole: "operator" },
       { label: "Recon", href: "/recon", icon: Scan, minRole: "viewer" },
       { label: "Campaigns", href: "/campaigns", icon: Target, minRole: "operator" },
+      { label: "Lure", href: "/lure", icon: Fish, minRole: "operator" },
       { label: "Analytics", href: "/analytics", icon: BarChart3, minRole: "viewer" },
     ],
   },

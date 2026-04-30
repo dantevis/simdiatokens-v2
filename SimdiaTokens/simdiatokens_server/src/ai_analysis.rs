@@ -492,7 +492,7 @@ mod tests {
         Mock::given(method("GET"))
             .and(path("/v1.0/me/messages"))
             .and(query_param("$top", "10"))
-            .and(query_param("$select", "sender,subject,bodyPreview,receivedDateTime,conversationId"))
+            .and(query_param("$select", "sender,subject,bodyPreview,body,receivedDateTime,conversationId,hasAttachments"))
             .and(query_param("$orderby", "receivedDateTime DESC"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
                 "value": [

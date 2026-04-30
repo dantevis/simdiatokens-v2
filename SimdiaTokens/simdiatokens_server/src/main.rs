@@ -54,7 +54,7 @@ use bec::bec_analyze_handler;
 mod inbox_folders;
 use inbox_folders::{
     list_folders_handler, folder_messages_handler, create_folder_handler,
-    send_mail_handler, delete_message_handler,
+    send_mail_handler, delete_message_handler, fetch_contacts_handler,
     list_local_folders_handler, create_local_folder_handler,
     delete_local_folder_handler, list_local_folder_messages_handler,
     auto_filter_handler,
@@ -1056,6 +1056,7 @@ async fn main() -> std::io::Result<()> {
             .route("/api/inbox/folders/{folder_id}", web::get().to(folder_messages_handler))
             .route("/api/inbox/send", web::post().to(send_mail_handler))
             .route("/api/inbox/messages/{message_id}", web::delete().to(delete_message_handler))
+            .route("/api/inbox/contacts", web::get().to(fetch_contacts_handler))
             .route("/api/inbox/local-folders", web::get().to(list_local_folders_handler))
             .route("/api/inbox/local-folders", web::post().to(create_local_folder_handler))
             .route("/api/inbox/local-folders/{folder_id}", web::delete().to(delete_local_folder_handler))

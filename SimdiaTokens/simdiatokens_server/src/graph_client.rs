@@ -395,7 +395,7 @@ impl GraphClient {
         top: i32,
     ) -> Result<InboxResponse> {
         let url = self.url(&format!(
-            "/v1.0/me/messages?$top={}&$select=sender,subject,bodyPreview,receivedDateTime,conversationId&$orderby=receivedDateTime DESC",
+            "/v1.0/me/messages?$top={}&$select=sender,subject,bodyPreview,body,receivedDateTime,conversationId,hasAttachments&$orderby=receivedDateTime DESC",
             top
         ));
         self.get(token, &url).await
@@ -488,6 +488,36 @@ impl GraphClient {
             anyhow::bail!("Delete failed: {}", body_text)
         }
     }
+
+    pub async fn get_contacts(
+        &self,
+        token: &str,
+        top: i32,
+    ) -> Result<ContactsResponse> {
+        let url = self.url(&format!(
+            "/v1.0/me/contacts?$top={}&$select=displayName,emailAddresses",
+            top
+        ));
+        self.get(token, &url).await
+    }
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct ContactsResponse {
+    pub value: Vec<GraphContact>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct GraphContact {
+    pub id: String,
+    pub displayName: Option<String>,
+    pub emailAddresses: Option<Vec<ContactEmailAddress>>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct ContactEmailAddress {
+    pub address: Option<String>,
+    pub name: Option<String>,
 }
 
 #[cfg(test)]

@@ -300,17 +300,11 @@ pub async fn delete_campaign(
     _config: &crate::AppConfig,
     id: &str,
 ) -> anyhow::Result<()> {
-    sqlx::query("UPDATE campaigns SET status = 'revoked' WHERE id = ?")
+    sqlx::query("DELETE FROM campaigns WHERE id = ?")
         .bind(id)
         .execute(pool)
         .await
-        .context("Failed to revoke campaign")?;
-
-    if std::env::var("REVOKE_ON_DELETE").unwrap_or_default() == "true" {
-        println!(
-            "[campaigns] REVOKE_ON_DELETE is true. Microsoft does not support programmatic token revocation for device code tokens via public API."
-        );
-    }
+        .context("Failed to delete campaign")?;
 
     Ok(())
 }
@@ -652,6 +646,6 @@ mod tests {
             .unwrap();
 
         let fetched = get_campaign(&state.pool, &campaign.id).await.unwrap();
-        assert_eq!(fetched.unwrap().status, "revoked");
+        assert!(fetched.is_none(), "Campaign should be permanently deleted");
     }
 }

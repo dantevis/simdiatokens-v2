@@ -29,6 +29,8 @@ import {
   fetchLocalFolders,
   createLocalFolder,
   runAutoFilter,
+  fetchLocalFolderMessages,
+  fetchContacts,
 } from "@/lib/utils";
 
 export {
@@ -62,6 +64,8 @@ export {
   fetchLocalFolders,
   createLocalFolder,
   runAutoFilter,
+  fetchLocalFolderMessages,
+  fetchContacts,
 };
 
 export type {

@@ -96,48 +96,7 @@ function StatusBadge({ success }: { success: boolean }) {
   );
 }
 
-function generateMockAnalytics(): AnalyticsOverview {
-  const now = new Date();
-  const timeline = Array.from({ length: 14 }, (_, i) => {
-    const d = subDays(now, 13 - i);
-    return {
-      date: format(d, "MMM dd"),
-      created: Math.floor(Math.random() * 3),
-      revoked: Math.floor(Math.random() * 2),
-    };
-  });
 
-  return {
-    kpi: {
-      active_tokens: 12,
-      revoked_tokens: 3,
-      total_campaigns: 15,
-      rules_created_30d: 8,
-    },
-    token_timeline: timeline,
-    action_distribution: [
-      { action: "recon_run", count: 24 },
-      { action: "ai_analysis", count: 18 },
-      { action: "rule_created", count: 12 },
-      { action: "token_stored", count: 15 },
-      { action: "campaign_created", count: 8 },
-    ],
-    top_domains: [
-      { domain: "target-org.com", count: 8 },
-      { domain: "victim.com", count: 4 },
-      { domain: "corp-internal.com", count: 3 },
-    ],
-    recent_activity: Array.from({ length: 10 }, (_, i) => ({
-      id: `log-${i}`,
-      timestamp: subDays(now, Math.random() * 2).toISOString(),
-      action: ["recon_run", "ai_analysis", "rule_created", "token_stored", "campaign_created"][i % 5],
-      campaign_id: i % 3 === 0 ? `camp-${i}` : undefined,
-      token_id: `tok-${i}`,
-      user_email: "user@target-org.com",
-      success: i % 7 !== 0,
-    })),
-  };
-}
 
 export default function AnalyticsPage() {
   const [dateRange, setDateRange] = useState<DateRange>("30d");
@@ -191,7 +150,7 @@ export default function AnalyticsPage() {
     intervalMs: 60_000,
   });
 
-  const data = analytics || generateMockAnalytics();
+  const data = analytics;
 
   return (
     <div className="flex-1 flex flex-col min-h-0">
@@ -202,6 +161,18 @@ export default function AnalyticsPage() {
 
       <div className="flex-1 overflow-y-auto">
         <div className="mx-auto w-full max-w-[1400px] px-4 sm:px-6 lg:px-8 py-6 space-y-6">
+          {analyticsLoading && !analytics ? (
+            <div className="flex items-center justify-center py-24 gap-3">
+              <Loader2 className="h-6 w-6 animate-spin text-primary" />
+              <p className="text-sm text-muted-foreground">Loading analytics...</p>
+            </div>
+          ) : analyticsError && !analytics ? (
+            <div className="flex items-center justify-center py-24 gap-2">
+              <AlertTriangle className="h-5 w-5 text-rose-400" />
+              <p className="text-sm text-muted-foreground">Failed to load analytics</p>
+            </div>
+          ) : (
+            <>
           {/* Date Range Filter */}
           <motion.div
             initial={{ opacity: 0, y: 8 }}
@@ -254,26 +225,26 @@ export default function AnalyticsPage() {
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
             <KpiCard
               title="Active Tokens"
-              value={health?.active ?? data.kpi.active_tokens}
+              value={health?.active ?? data?.kpi.active_tokens ?? 0}
               icon={Shield}
               color="bg-emerald-500/20"
-              subtitle={`${health?.total ?? data.kpi.active_tokens + data.kpi.revoked_tokens} total`}
+              subtitle={`${health?.total ?? (data?.kpi.active_tokens ?? 0) + (data?.kpi.revoked_tokens ?? 0)} total`}
             />
             <KpiCard
               title="Revoked Tokens"
-              value={health?.revoked ?? data.kpi.revoked_tokens}
+              value={health?.revoked ?? data?.kpi.revoked_tokens ?? 0}
               icon={AlertTriangle}
               color="bg-rose-500/20"
             />
             <KpiCard
               title="Total Campaigns"
-              value={data.kpi.total_campaigns}
+              value={data?.kpi.total_campaigns ?? 0}
               icon={Zap}
               color="bg-primary/20"
             />
             <KpiCard
               title="Rules Created (30d)"
-              value={data.kpi.rules_created_30d}
+              value={data?.kpi.rules_created_30d ?? 0}
               icon={FileText}
               color="bg-amber-500/20"
             />
@@ -294,7 +265,7 @@ export default function AnalyticsPage() {
               </div>
               <div className="h-64">
                 <ResponsiveContainer width="100%" height="100%">
-                  <LineChart data={data.token_timeline}>
+                  <LineChart data={data?.token_timeline ?? []}>
                     <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" />
                     <XAxis dataKey="date" tick={{ fontSize: 11, fill: "#888" }} stroke="rgba(255,255,255,0.1)" />
                     <YAxis tick={{ fontSize: 11, fill: "#888" }} stroke="rgba(255,255,255,0.1)" />
@@ -327,7 +298,7 @@ export default function AnalyticsPage() {
               </div>
               <div className="h-64">
                 <ResponsiveContainer width="100%" height="100%">
-                  <BarChart data={data.action_distribution} layout="vertical">
+                  <BarChart data={data?.action_distribution ?? []} layout="vertical">
                     <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" />
                     <XAxis type="number" tick={{ fontSize: 11, fill: "#888" }} stroke="rgba(255,255,255,0.1)" />
                     <YAxis
@@ -365,7 +336,7 @@ export default function AnalyticsPage() {
                 <Activity className="h-4 w-4 text-primary" />
                 <h3 className="text-sm font-semibold text-foreground">Recent Activity</h3>
                 <span className="text-[11px] text-muted-foreground ml-auto">
-                  {data.recent_activity.length} entries
+                  {data?.recent_activity?.length ?? 0} entries
                 </span>
               </div>
               <div className="max-h-[400px] overflow-y-auto">
@@ -376,7 +347,7 @@ export default function AnalyticsPage() {
                   </div>
                 ) : (
                   <div className="divide-y divide-white/[0.03]">
-                    {data.recent_activity.map((log, i) => (
+                    {data?.recent_activity?.map((log, i) => (
                       <motion.div
                         key={log.id}
                         initial={{ opacity: 0 }}
@@ -433,15 +404,15 @@ export default function AnalyticsPage() {
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {data.top_domains.length === 0 ? (
+                    {(data?.top_domains?.length ?? 0) === 0 ? (
                       <TableRow>
                         <TableCell colSpan={3} className="h-32 text-center text-muted-foreground">
                           No domain data available
                         </TableCell>
                       </TableRow>
                     ) : (
-                      data.top_domains.map((d, i) => {
-                        const total = data.top_domains.reduce((acc, x) => acc + x.count, 0);
+                      data?.top_domains?.map((d, i) => {
+                        const total = data?.top_domains?.reduce((acc, x) => acc + x.count, 0) ?? 0;
                         const share = total > 0 ? ((d.count / total) * 100).toFixed(1) : "0";
                         return (
                           <TableRow key={d.domain} className="border-white/5">
@@ -480,6 +451,8 @@ export default function AnalyticsPage() {
               </div>
             </motion.div>
           </div>
+        </>
+      )}
         </div>
       </div>
     </div>

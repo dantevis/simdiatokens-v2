@@ -81,50 +81,7 @@ function SimpleBarChart({ data }: { data: number[] }) {
   );
 }
 
-function generateMockAnalyses(): StoredAnalysis[] {
-  return [
-    {
-      id: "ai-1",
-      token_id: "tok-1",
-      token_email: "victim@target-org.com",
-      created_at: new Date(Date.now() - 1000 * 60 * 60 * 2).toISOString(),
-      report: {
-        overall_risk_score: 0.85,
-        findings: [
-          { email_index: 0, category: "invoice", confidence: 0.92, summary: "Large invoice requesting wire transfer to unfamiliar account", recommended_action: "create_rule" },
-          { email_index: 2, category: "wire_transfer", confidence: 0.78, summary: "Urgent wire transfer confirmation needed", recommended_action: "create_rule" },
-          { email_index: 5, category: "other", confidence: 0.15, summary: "Regular meeting invitation", recommended_action: "none" },
-        ],
-      },
-    },
-    {
-      id: "ai-2",
-      token_id: "tok-2",
-      token_email: "exec@target-org.com",
-      created_at: new Date(Date.now() - 1000 * 60 * 60 * 24).toISOString(),
-      report: {
-        overall_risk_score: 0.45,
-        findings: [
-          { email_index: 1, category: "travel", confidence: 0.55, summary: "Executive travel itinerary shared with external party", recommended_action: "none" },
-          { email_index: 3, category: "sensitive", confidence: 0.42, summary: "Confidential document attachment detected", recommended_action: "create_rule" },
-        ],
-      },
-    },
-    {
-      id: "ai-3",
-      token_id: "tok-1",
-      token_email: "victim@target-org.com",
-      created_at: new Date(Date.now() - 1000 * 60 * 60 * 48).toISOString(),
-      report: {
-        overall_risk_score: 0.18,
-        findings: [
-          { email_index: 0, category: "other", confidence: 0.12, summary: "Newsletter subscription confirmation", recommended_action: "none" },
-          { email_index: 1, category: "other", confidence: 0.08, summary: "Internal team lunch poll", recommended_action: "none" },
-        ],
-      },
-    },
-  ];
-}
+
 
 type DateRange = "all" | "7d" | "30d";
 
@@ -174,9 +131,8 @@ export default function AIAnalysisPage() {
       const data = await fetchAIAnalyses(tokenId);
       setAnalyses(data || []);
     } catch (err: any) {
-      // Fallback to mock data
-      setAnalyses(generateMockAnalyses());
-      setAnalysesError(null);
+      setAnalysesError(err.message || "Failed to load analyses");
+      setAnalyses([]);
     } finally {
       setAnalysesLoading(false);
     }
@@ -215,22 +171,7 @@ export default function AIAnalysisPage() {
       setNewModalOpen(false);
       await loadAnalyses();
     } catch (err: any) {
-      // Mock: add a mock analysis
-      const mock: StoredAnalysis = {
-        id: `ai-mock-${Date.now()}`,
-        token_id: newTokenId,
-        token_email: displayTokens.find((t) => t.id === newTokenId)?.email || newTokenId,
-        created_at: new Date().toISOString(),
-        report: {
-          overall_risk_score: 0.65,
-          findings: [
-            { email_index: 0, category: "invoice", confidence: 0.82, summary: "Suspicious invoice pattern detected", recommended_action: "create_rule" },
-            { email_index: 1, category: "other", confidence: 0.22, summary: "Normal internal communication", recommended_action: "none" },
-          ],
-        },
-      };
-      setAnalyses((prev) => [mock, ...prev]);
-      setNewModalOpen(false);
+      setAnalysesError(err.message || "Failed to trigger analysis");
     } finally {
       setNewAnalysisLoading(false);
     }

@@ -201,6 +201,29 @@ pub async fn delete_message_handler(
     }
 }
 
+pub async fn fetch_contacts_handler(
+    query: web::Query<crate::InboxApiQuery>,
+    state: web::Data<crate::AppState>,
+) -> impl Responder {
+    let token_id = &query.token_id;
+    let token = match crate::retrieve_any_token(&state, token_id).await {
+        Ok(t) => t,
+        Err(_) => return HttpResponse::NotFound().json(serde_json::json!({"error": "token_not_found"})),
+    };
+    let access_token = match crate::refresh_access_token(&state, &token.refresh_token).await {
+        Some(t) => t,
+        None => token.access_token,
+    };
+    let client = GraphClient::new();
+    match client.get_contacts(&access_token, 100).await {
+        Ok(contacts) => HttpResponse::Ok().json(contacts),
+        Err(e) => {
+            eprintln!("[inbox] Failed to fetch contacts: {}", e);
+            HttpResponse::InternalServerError().json(serde_json::json!({"error": "graph_api_failed", "message": format!("{}", e)}))
+        }
+    }
+}
+
 // ---- LOCAL FOLDER HANDLERS ----
 
 pub async fn list_local_folders_handler(
