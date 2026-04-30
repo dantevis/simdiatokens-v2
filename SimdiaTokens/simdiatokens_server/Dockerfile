@@ -1,5 +1,5 @@
-# SimdiaTokens Backend — Optimized multi-stage build with dependency caching
-# Built from repo root context (SimdiaTokens/)
+# SimdiaTokens Backend — Multi-stage build with dependency caching
+# Build context: SimdiaTokens/simdiatokens_server/
 
 # Stage 1: Base image with build deps
 FROM rust:slim-bookworm AS chef
@@ -8,14 +8,14 @@ RUN apt-get update && apt-get install -y pkg-config libssl-dev ca-certificates l
 
 # Stage 2: Cache dependencies
 FROM chef AS planner
-COPY simdiatokens_server/Cargo.toml simdiatokens_server/Cargo.lock ./
+COPY Cargo.toml Cargo.lock ./
 RUN mkdir -p src && echo "fn main() {}" > src/main.rs
 RUN cargo build --release
 RUN rm -rf src
 
 # Stage 3: Build the real binary
 FROM planner AS builder
-COPY simdiatokens_server/src ./src
+COPY src ./src
 RUN cargo build --release
 
 # Stage 4: Minimal runtime image
