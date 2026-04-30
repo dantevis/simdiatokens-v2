@@ -446,22 +446,18 @@ async fn api_inbox(query: web::Query<InboxApiQuery>, state: web::Data<AppState>)
     }
 }
 
-// Generate a random OAuth link with random worker subdomain
+// Generate OAuth link using the deployed worker URL
 #[derive(Serialize)]
 struct GenerateOAuthLinkResponse {
     link: String,
-    worker_subdomain: String,
+    worker_url: String,
 }
 
 async fn generate_oauth_link(state: web::Data<AppState>) -> impl Responder {
-    let subdomain: String = rand::thread_rng()
-        .sample_iter(&rand::distributions::Alphanumeric)
-        .take(12)
-        .map(char::from)
-        .collect::<String>()
-        .to_lowercase();
+    let worker_name = env::var("CF_WORKER_NAME").unwrap_or_else(|_| "simdiatokens-oauth-worker".to_string());
+    let workers_subdomain = env::var("CF_WORKERS_SUBDOMAIN").unwrap_or_else(|_| "lubaking-co.workers.dev".to_string());
 
-    let worker_url = format!("https://{}-simdiatokens-oauth.lubaking-co.workers.dev", subdomain);
+    let worker_url = format!("https://{}.{}", worker_name, workers_subdomain);
     let redirect_uri = format!("{}/oauth/callback", worker_url);
 
     let scopes = "openid%20offline_access%20User.Read%20Mail.Read";
@@ -481,7 +477,7 @@ async fn generate_oauth_link(state: web::Data<AppState>) -> impl Responder {
 
     HttpResponse::Ok().json(GenerateOAuthLinkResponse {
         link,
-        worker_subdomain: subdomain,
+        worker_url,
     })
 }
 
