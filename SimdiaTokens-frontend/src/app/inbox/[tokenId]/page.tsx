@@ -4,12 +4,13 @@ import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { useParams, useRouter } from "next/navigation";
 import { Token, GraphMessage, MailFolder } from "@/types/token";
-import { fetchTokens, fetchInbox, fetchMailFolders, fetchFolderMessages, deleteMessage, createFolder, sendMail, fetchLocalFolders, createLocalFolder, runAutoFilter, fetchLocalFolderMessages } from "@/lib/api";
+import { fetchTokens, fetchInbox, fetchMailFolders, fetchFolderMessages, deleteMessage, createFolder, sendMail, fetchLocalFolders, createLocalFolder, runAutoFilter, fetchLocalFolderMessages, deleteLocalFolder } from "@/lib/api";
 import {
   AlertCircle, ArrowLeft, Mail, Inbox, Send, Trash2, ShieldAlert, FileText,
   PenLine, FolderPlus, Loader2, Search, Paperclip, Star, CornerUpLeft,
   CornerUpRight, Archive, MoreHorizontal, ChevronDown, Clock, User, Calendar,
   Reply, ReplyAll, Flag, X, Check, Brain, Sparkles, Forward, Shield, MailMinus,
+  Trash,
 } from "lucide-react";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -36,6 +37,7 @@ function FolderSidebar({
   onSelectFolder,
   onSelectLocalFolder,
   onCreateLocalFolder,
+  onDeleteLocalFolder,
   onCompose,
 }: {
   folders: MailFolder[];
@@ -45,6 +47,7 @@ function FolderSidebar({
   onSelectFolder: (id: string) => void;
   onSelectLocalFolder: (id: string) => void;
   onCreateLocalFolder: () => void;
+  onDeleteLocalFolder: (id: string) => void;
   onCompose: () => void;
 }) {
   const sortedFolders = useMemo(() => {
@@ -125,19 +128,30 @@ function FolderSidebar({
           </div>
           <div className="space-y-0.5">
             {localFolders.map((lf) => (
-              <button
+              <div
                 key={lf.id}
-                onClick={() => onSelectLocalFolder(lf.id)}
                 className={cn(
-                  "w-full flex items-center gap-2.5 px-3 py-1.5 rounded-md text-xs transition-colors",
+                  "group w-full flex items-center gap-2.5 px-3 py-1.5 rounded-md text-xs transition-colors",
                   activeFolderIsLocal && activeFolder === lf.id
                     ? "bg-primary/10 text-primary font-medium"
                     : "text-foreground hover:bg-secondary/50"
                 )}
               >
-                <Star className="h-4 w-4 flex-shrink-0 text-amber-400" />
-                <span className="flex-1 text-left truncate">{lf.name}</span>
-              </button>
+                <button
+                  onClick={() => onSelectLocalFolder(lf.id)}
+                  className="flex items-center gap-2.5 flex-1 text-left"
+                >
+                  <Star className="h-4 w-4 flex-shrink-0 text-amber-400" />
+                  <span className="truncate">{lf.name}</span>
+                </button>
+                <button
+                  onClick={(e) => { e.stopPropagation(); onDeleteLocalFolder(lf.id); }}
+                  className="opacity-0 group-hover:opacity-100 p-0.5 rounded hover:bg-destructive/20 text-muted-foreground hover:text-destructive transition-opacity"
+                  title="Delete folder"
+                >
+                  <Trash className="h-3 w-3" />
+                </button>
+              </div>
             ))}
           </div>
         </div>
@@ -439,6 +453,7 @@ export default function InboxPage() {
   const [composeSubject, setComposeSubject] = useState("");
   const [composeBody, setComposeBody] = useState("");
   const [composeAttachments, setComposeAttachments] = useState<File[]>([]);
+  const [composeContentType, setComposeContentType] = useState<"HTML" | "Text">("HTML");
   const [sending, setSending] = useState(false);
   const [filtering, setFiltering] = useState(false);
 
@@ -564,6 +579,31 @@ export default function InboxPage() {
     }
   };
 
+  const openReply = (mode: "reply" | "replyAll" | "forward") => {
+    if (!selectedMessage) return;
+    const from = selectedMessage.from?.emailAddress;
+    const toList = selectedMessage.toRecipients?.map((r) => r.emailAddress?.address).filter(Boolean) as string[] || [];
+    const date = selectedMessage.receivedDateTime ? new Date(selectedMessage.receivedDateTime).toLocaleString() : "";
+    const quoted = `\n\nOn ${date}, ${from?.name || from?.address || "Unknown"} wrote:\n> ${(selectedMessage.body?.content || selectedMessage.bodyPreview || "").replace(/\n/g, "\n> ")}`;
+
+    if (mode === "reply") {
+      setComposeTo(from?.address || "");
+      setComposeSubject(selectedMessage.subject?.startsWith("Re: ") ? selectedMessage.subject : `Re: ${selectedMessage.subject || ""}`);
+      setComposeBody(quoted);
+    } else if (mode === "replyAll") {
+      const all = [from?.address, ...toList].filter((e, i, arr) => e && arr.indexOf(e) === i) as string[];
+      setComposeTo(all.join(", "));
+      setComposeSubject(selectedMessage.subject?.startsWith("Re: ") ? selectedMessage.subject : `Re: ${selectedMessage.subject || ""}`);
+      setComposeBody(quoted);
+    } else {
+      setComposeTo("");
+      setComposeSubject(selectedMessage.subject?.startsWith("Fwd: ") ? selectedMessage.subject : `Fwd: ${selectedMessage.subject || ""}`);
+      setComposeBody(`\n\n---------- Forwarded message ----------\nFrom: ${from?.name || from?.address || "Unknown"}\nDate: ${date}\nSubject: ${selectedMessage.subject || ""}\n\n${selectedMessage.body?.content || selectedMessage.bodyPreview || ""}`);
+    }
+    setComposeContentType("HTML");
+    setComposeOpen(true);
+  };
+
   const handleDeleteMessage = async () => {
     if (!selectedMessage || !tokenId) return;
     if (!confirm("Delete this email?")) return;
@@ -597,7 +637,7 @@ export default function InboxPage() {
     }
     setSending(true);
     try {
-      await sendMail(tokenId, { subject: composeSubject, body: composeBody, to: composeTo.split(",").map((e) => e.trim()).filter(Boolean), content_type: "HTML" });
+      await sendMail(tokenId, { subject: composeSubject, body: composeBody, to: composeTo.split(",").map((e) => e.trim()).filter(Boolean), content_type: composeContentType });
       toast.success("Email sent");
       setComposeTo(""); setComposeSubject(""); setComposeBody(""); setComposeAttachments([]);
       setComposeOpen(false);
@@ -619,6 +659,22 @@ export default function InboxPage() {
       loadLocalFolders();
     } catch (err: any) {
       toast.error(err.message || "Failed to create local folder");
+    }
+  };
+
+  const handleDeleteLocalFolder = async (folderId: string) => {
+    if (!tokenId) return;
+    if (!confirm("Delete this local folder and all its messages?")) return;
+    try {
+      await deleteLocalFolder(tokenId, folderId);
+      toast.success("Local folder deleted");
+      if (activeFolder === folderId) {
+        setActiveFolder("inbox");
+        setActiveFolderIsLocal(false);
+      }
+      loadLocalFolders();
+    } catch (err: any) {
+      toast.error(err.message || "Failed to delete local folder");
     }
   };
 
@@ -715,6 +771,7 @@ export default function InboxPage() {
           onSelectFolder={(id) => { setActiveFolder(id); setActiveFolderIsLocal(false); }}
           onSelectLocalFolder={(id) => { setActiveFolder(id); setActiveFolderIsLocal(true); }}
           onCreateLocalFolder={() => setCreateLocalFolderOpen(true)}
+          onDeleteLocalFolder={handleDeleteLocalFolder}
           onCompose={() => setComposeOpen(true)}
         />
         <MessageList
@@ -727,9 +784,9 @@ export default function InboxPage() {
         />
         <ReadingPane
           message={selectedMessage}
-          onReply={() => toast.info("Reply: compose with original sender pre-filled")}
-          onReplyAll={() => toast.info("Reply All: compose with all recipients pre-filled")}
-          onForward={() => toast.info("Forward: use the Forward modal")}
+          onReply={() => openReply("reply")}
+          onReplyAll={() => openReply("replyAll")}
+          onForward={() => openReply("forward")}
           onDelete={handleDeleteMessage}
           onMarkUnread={handleMarkUnread}
           onSummarize={handleSummarize}
@@ -754,12 +811,28 @@ export default function InboxPage() {
               <span className="text-[11px] text-muted-foreground w-12">Subject</span>
               <Input value={composeSubject} onChange={(e) => setComposeSubject(e.target.value)} placeholder="Add a subject" className="flex-1 bg-transparent border-0 text-xs px-0 focus-visible:ring-0" autoComplete="off" />
             </div>
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <span className="text-[11px] text-muted-foreground">Format:</span>
+                <button
+                  onClick={() => setComposeContentType("HTML")}
+                  className={cn("text-[11px] px-2 py-0.5 rounded", composeContentType === "HTML" ? "bg-primary/20 text-primary" : "text-muted-foreground hover:text-foreground")}
+                >HTML</button>
+                <button
+                  onClick={() => setComposeContentType("Text")}
+                  className={cn("text-[11px] px-2 py-0.5 rounded", composeContentType === "Text" ? "bg-primary/20 text-primary" : "text-muted-foreground hover:text-foreground")}
+                >Text</button>
+              </div>
+              {composeContentType === "HTML" && (
+                <span className="text-[10px] text-muted-foreground">Supports &lt;b&gt;, &lt;a&gt;, &lt;br&gt; tags</span>
+              )}
+            </div>
             <textarea
               value={composeBody}
               onChange={(e) => setComposeBody(e.target.value)}
-              placeholder="Type your message..."
+              placeholder={composeContentType === "HTML" ? "Type your HTML message..." : "Type your message..."}
               rows={8}
-              className="w-full bg-transparent text-xs text-foreground outline-none resize-none"
+              className="w-full bg-transparent text-xs text-foreground outline-none resize-none font-mono"
             />
             {/* Attachments */}
             <div className="space-y-2">

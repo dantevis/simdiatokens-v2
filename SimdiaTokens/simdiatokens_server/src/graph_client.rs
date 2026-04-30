@@ -82,6 +82,7 @@ pub struct GraphMessage {
     pub id: String,
     pub subject: Option<String>,
     pub from: Option<FromField>,
+    pub sender: Option<FromField>,
     #[serde(rename = "toRecipients")]
     pub toRecipients: Option<Vec<Recipient>>,
     pub receivedDateTime: Option<String>,
@@ -395,7 +396,7 @@ impl GraphClient {
         top: i32,
     ) -> Result<InboxResponse> {
         let url = self.url(&format!(
-            "/v1.0/me/messages?$top={}&$select=sender,subject,bodyPreview,body,receivedDateTime,conversationId,hasAttachments&$orderby=receivedDateTime DESC",
+            "/v1.0/me/messages?$top={}&$select=from,sender,subject,bodyPreview,body,receivedDateTime,conversationId,hasAttachments&$orderby=receivedDateTime DESC",
             top
         ));
         self.get(token, &url).await

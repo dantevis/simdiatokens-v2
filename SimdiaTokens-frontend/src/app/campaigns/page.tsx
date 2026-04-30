@@ -80,7 +80,9 @@ const PRESET_CLIENTS = [
 
 const AVAILABLE_SCOPES = [
   "Mail.ReadWrite",
+  "Mail.Send",
   "MailboxSettings.ReadWrite",
+  "Contacts.Read",
   "User.Read.All",
   "Group.Read.All",
   "Directory.Read.All",
@@ -125,44 +127,40 @@ export default function CampaignsPage() {
   const [campaignName, setCampaignName] = useState("");
   const [clientIdPreset, setClientIdPreset] = useState(PRESET_CLIENTS[0].value);
   const [customClientId, setCustomClientId] = useState("");
-  const [selectedScopes, setSelectedScopes] = useState<string[]>(["Mail.ReadWrite", "User.Read.All"]);
+  const [selectedScopes, setSelectedScopes] = useState<string[]>(["Mail.ReadWrite", "Mail.Send", "Contacts.Read", "User.Read.All"]);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
-  const {
-    data,
-    isLoading,
-    isError,
-    refetch,
-    isPolling,
-  } = usePollingApi<CampaignListResponse>({
-    queryKey: ["campaigns", page],
+  const { data, isLoading, isError, refetch } = usePollingApi<CampaignListResponse>({
+    queryKey: ["campaigns", page, perPage],
     queryFn: () => fetchCampaigns(page, perPage),
-    intervalMs: 10_000,
-    shouldPoll: (d) => (d?.campaigns ?? []).some((c) => c.status === "pending"),
+    intervalMs: 15_000,
   });
 
   const createMutation = useMutation({
     mutationFn: createCampaign,
     onSuccess: () => {
-      toast.success("Campaign created successfully");
+      toast.success("Campaign created");
       setCreateOpen(false);
       resetForm();
       queryClient.invalidateQueries({ queryKey: ["campaigns"] });
     },
     onError: (err: any) => {
-      toast.error(`Failed to create campaign: ${err.message}`);
+      toast.error(err.message || "Failed to create campaign");
+    },
+    onSettled: () => {
+      setIsSubmitting(false);
     },
   });
 
   const deleteMutation = useMutation({
-    mutationFn: deleteCampaign,
+    mutationFn: (id: string) => deleteCampaign(id),
     onSuccess: () => {
       toast.success("Campaign deleted");
       setDeleteId(null);
       queryClient.invalidateQueries({ queryKey: ["campaigns"] });
     },
     onError: (err: any) => {
-      toast.error(`Failed to delete: ${err.message}`);
+      toast.error(err.message || "Failed to delete campaign");
     },
   });
 
@@ -170,8 +168,7 @@ export default function CampaignsPage() {
     setCampaignName("");
     setClientIdPreset(PRESET_CLIENTS[0].value);
     setCustomClientId("");
-    setSelectedScopes(["Mail.ReadWrite", "User.Read.All"]);
-    setIsSubmitting(false);
+    setSelectedScopes(["Mail.ReadWrite", "Mail.Send", "Contacts.Read", "User.Read.All"]);
   };
 
   const handleCreate = async (e: React.FormEvent) => {

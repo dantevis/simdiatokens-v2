@@ -4,11 +4,12 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import { motion } from "framer-motion";
 import { useParams, useRouter } from "next/navigation";
 import { Token } from "@/types/token";
-import { fetchTokens, fetchContacts, sendMail } from "@/lib/api";
+import { fetchTokens, fetchContacts, sendMail, generateLureEmail } from "@/lib/api";
 import {
   Fish, ArrowLeft, Loader2, AlertCircle, Send, User, Mail,
   Plus, X, Eye, ShieldAlert, CheckCircle2, Link as LinkIcon,
-  Search, ChevronDown,
+  Search, ChevronDown, Sparkles, FileText, Calendar, Receipt,
+  Wand2,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -17,9 +18,6 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
 } from "@/components/ui/dialog";
-import {
-  DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 
@@ -48,6 +46,27 @@ type Contact = {
   emailAddresses?: { address?: string; name?: string }[];
 };
 
+const LURE_TEMPLATES = [
+  {
+    id: "shared_document",
+    label: "Shared Document",
+    description: "OneDrive/SharePoint file share notification",
+    icon: FileText,
+  },
+  {
+    id: "meeting_followup",
+    label: "Meeting Follow-up",
+    description: "Teams meeting action items and notes",
+    icon: Calendar,
+  },
+  {
+    id: "invoice",
+    label: "Invoice / Payment",
+    description: "Vendor invoice or payment reminder",
+    icon: Receipt,
+  },
+];
+
 export default function LureComposerPage() {
   const params = useParams<{ tokenId: string }>();
   const tokenId = params?.tokenId;
@@ -67,10 +86,13 @@ export default function LureComposerPage() {
   const [body, setBody] = useState("");
   const [contentType, setContentType] = useState<"HTML" | "Text">("HTML");
   const [sending, setSending] = useState(false);
+  const [generating, setGenerating] = useState(false);
+  const [antiSpamNotes, setAntiSpamNotes] = useState<string[]>([]);
 
   const [previewOpen, setPreviewOpen] = useState(false);
   const [approvalOpen, setApprovalOpen] = useState(false);
   const [confirmText, setConfirmText] = useState("");
+  const [templatePickerOpen, setTemplatePickerOpen] = useState(false);
 
   const mounted = useRef(false);
 
@@ -131,7 +153,36 @@ export default function LureComposerPage() {
 
   const insertOAuthLink = () => {
     const link = "[OAUTH_LINK_PLACEHOLDER]";
-    setBody((prev) => prev + `\n\n<a href="${link}">Click here to verify your account</a>`);
+    setBody((prev) => prev + `\n\n<a href="${link}">View document</a>`);
+  };
+
+  const handleGenerateAI = async (templateType: string) => {
+    if (!token || toRecipients.length === 0) {
+      toast.error("Add at least one recipient first");
+      return;
+    }
+    setGenerating(true);
+    setTemplatePickerOpen(false);
+    try {
+      const targetEmail = toRecipients[0];
+      const targetContact = contacts.find((c) => c.emailAddresses?.some((e) => e.address === targetEmail));
+      const res = await generateLureEmail({
+        target_email: targetEmail,
+        target_name: targetContact?.displayName || undefined,
+        victim_email: token.email || "",
+        template_type: templateType,
+        context: "corporate office environment",
+      });
+      setSubject(res.subject);
+      setBody(res.html_body || res.body);
+      setContentType("HTML");
+      setAntiSpamNotes(res.anti_spam_notes || []);
+      toast.success("AI lure email generated", { description: "Anti-spam techniques applied" });
+    } catch (err: any) {
+      toast.error(err.message || "Failed to generate lure email");
+    } finally {
+      setGenerating(false);
+    }
   };
 
   const handlePreview = () => {
@@ -175,6 +226,7 @@ export default function LureComposerPage() {
       setToRecipients([]);
       setSubject("");
       setBody("");
+      setAntiSpamNotes([]);
     } catch (err: any) {
       toast.error(err.message || "Failed to send lure email");
     } finally {
@@ -226,6 +278,10 @@ export default function LureComposerPage() {
           </div>
         </div>
         <div className="ml-auto flex items-center gap-2">
+          <Button variant="outline" size="sm" onClick={() => setTemplatePickerOpen(true)} disabled={generating}>
+            <Wand2 className="h-4 w-4 mr-1.5" />
+            {generating ? "Generating..." : "AI Generate"}
+          </Button>
           <Button variant="outline" size="sm" onClick={handlePreview}>
             <Eye className="h-4 w-4 mr-1.5" /> Preview
           </Button>
@@ -265,6 +321,9 @@ export default function LureComposerPage() {
                       <div className="flex flex-col items-center justify-center py-8 gap-2">
                         <User className="h-6 w-6 text-muted-foreground/30" />
                         <p className="text-xs text-muted-foreground">No contacts found</p>
+                        <p className="text-[10px] text-muted-foreground/60 text-center px-4">
+                          Contacts require <code className="bg-secondary/50 px-1 rounded">Contacts.Read</code> scope. New tokens will have this scope.
+                        </p>
                       </div>
                     ) : (
                       <div className="space-y-1">
@@ -343,17 +402,16 @@ export default function LureComposerPage() {
                 <div className="flex items-center justify-between mb-2">
                   <label className="text-xs font-medium text-muted-foreground">Body</label>
                   <div className="flex items-center gap-2">
-                    <DropdownMenu>
-                      <DropdownMenuTrigger render={
-                        <Button variant="ghost" size="sm" className="h-7 text-xs gap-1">
-                          {contentType} <ChevronDown className="h-3 w-3" />
-                        </Button>
-                      } />
-                      <DropdownMenuContent align="end" className="glass-strong border-white/10">
-                        <DropdownMenuItem onClick={() => setContentType("HTML")}>HTML</DropdownMenuItem>
-                        <DropdownMenuItem onClick={() => setContentType("Text")}>Text</DropdownMenuItem>
-                      </DropdownMenuContent>
-                    </DropdownMenu>
+                    <div className="flex items-center gap-1">
+                      <button
+                        onClick={() => setContentType("HTML")}
+                        className={cn("text-[11px] px-2 py-0.5 rounded transition-colors", contentType === "HTML" ? "bg-primary/20 text-primary" : "text-muted-foreground hover:text-foreground")}
+                      >HTML</button>
+                      <button
+                        onClick={() => setContentType("Text")}
+                        className={cn("text-[11px] px-2 py-0.5 rounded transition-colors", contentType === "Text" ? "bg-primary/20 text-primary" : "text-muted-foreground hover:text-foreground")}
+                      >Text</button>
+                    </div>
                     <Button variant="ghost" size="sm" className="h-7 text-xs gap-1" onClick={insertOAuthLink}>
                       <LinkIcon className="h-3 w-3" /> Insert Link
                     </Button>
@@ -362,10 +420,32 @@ export default function LureComposerPage() {
                 <textarea
                   value={body}
                   onChange={(e) => setBody(e.target.value)}
-                  placeholder="Compose your lure email..."
+                  placeholder={contentType === "HTML" ? "Type your HTML message..." : "Type your message..."}
                   className="w-full h-64 rounded-lg border border-white/5 bg-secondary/30 px-3 py-2.5 text-sm text-foreground placeholder:text-muted-foreground/50 outline-none focus-visible:ring-1 focus-visible:ring-primary/30 resize-none font-mono"
                 />
               </div>
+
+              {/* Anti-spam notes */}
+              {antiSpamNotes.length > 0 && (
+                <motion.div
+                  initial={{ opacity: 0, height: 0 }}
+                  animate={{ opacity: 1, height: "auto" }}
+                  className="rounded-xl border border-emerald-500/20 bg-emerald-500/5 p-4"
+                >
+                  <div className="flex items-center gap-2 mb-2">
+                    <Sparkles className="h-3.5 w-3.5 text-emerald-400" />
+                    <p className="text-[11px] font-semibold text-emerald-400 uppercase">Anti-Spam Techniques Applied</p>
+                  </div>
+                  <div className="flex flex-wrap gap-1.5">
+                    {antiSpamNotes.map((note, i) => (
+                      <Badge key={i} variant="secondary" className="text-[10px] bg-emerald-500/10 text-emerald-300 border-emerald-500/20">
+                        <CheckCircle2 className="h-2.5 w-2.5 mr-1" />
+                        {note}
+                      </Badge>
+                    ))}
+                  </div>
+                </motion.div>
+              )}
 
               {/* Send Button */}
               <div className="flex justify-end">
@@ -382,6 +462,44 @@ export default function LureComposerPage() {
           </div>
         </div>
       </div>
+
+      {/* Template Picker Dialog */}
+      <Dialog open={templatePickerOpen} onOpenChange={setTemplatePickerOpen}>
+        <DialogContent className="sm:max-w-[500px] glass-strong border-white/10">
+          <DialogHeader>
+            <DialogTitle className="text-sm font-semibold flex items-center gap-2">
+              <Wand2 className="h-4 w-4 text-primary" />
+              Generate AI Lure Email
+            </DialogTitle>
+            <DialogDescription className="text-xs text-muted-foreground">
+              Select a template. AI will generate a sophisticated lure that bypasses spam filters using natural language variation and contextual personalization.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3 py-2">
+            {LURE_TEMPLATES.map((tmpl) => {
+              const Icon = tmpl.icon;
+              return (
+                <button
+                  key={tmpl.id}
+                  onClick={() => handleGenerateAI(tmpl.id)}
+                  className="w-full flex items-start gap-3 p-3 rounded-lg border border-white/5 bg-secondary/10 hover:bg-secondary/20 hover:border-primary/20 transition-all text-left"
+                >
+                  <div className="h-9 w-9 rounded-lg bg-primary/10 flex items-center justify-center flex-shrink-0">
+                    <Icon className="h-4 w-4 text-primary" />
+                  </div>
+                  <div>
+                    <p className="text-sm font-medium text-foreground">{tmpl.label}</p>
+                    <p className="text-[11px] text-muted-foreground">{tmpl.description}</p>
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+          <DialogFooter>
+            <Button variant="outline" size="sm" onClick={() => setTemplatePickerOpen(false)}>Cancel</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* Preview Dialog */}
       <Dialog open={previewOpen} onOpenChange={setPreviewOpen}>

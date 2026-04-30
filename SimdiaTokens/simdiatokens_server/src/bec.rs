@@ -143,10 +143,12 @@ pub async fn bec_analyze_handler(
             let sender_email = msg.from.as_ref()
                 .and_then(|f| f.emailAddress.as_ref())
                 .and_then(|e| e.address.clone())
-                .unwrap_or_default();
+                .or_else(|| msg.sender.as_ref().and_then(|f| f.emailAddress.as_ref()).and_then(|e| e.address.clone()))
+                .unwrap_or_else(|| "unknown".to_string());
             let sender_name = msg.from.as_ref()
                 .and_then(|f| f.emailAddress.as_ref())
                 .and_then(|e| e.name.clone())
+                .or_else(|| msg.sender.as_ref().and_then(|f| f.emailAddress.as_ref()).and_then(|e| e.name.clone()))
                 .unwrap_or_else(|| sender_email.clone());
             participants.insert(sender_email.clone());
             BECMessage {

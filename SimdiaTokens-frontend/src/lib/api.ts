@@ -28,9 +28,11 @@ import {
   deleteMessage,
   fetchLocalFolders,
   createLocalFolder,
+  deleteLocalFolder,
   runAutoFilter,
   fetchLocalFolderMessages,
   fetchContacts,
+  generateLureEmail,
 } from "@/lib/utils";
 
 export {
@@ -66,6 +68,8 @@ export {
   runAutoFilter,
   fetchLocalFolderMessages,
   fetchContacts,
+  deleteLocalFolder,
+  generateLureEmail,
 };
 
 export type {
