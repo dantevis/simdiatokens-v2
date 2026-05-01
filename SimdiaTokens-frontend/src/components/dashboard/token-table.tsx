@@ -489,6 +489,14 @@ export function TokenTable({ tokens, loading, onRefresh, lastUpdated }: TokenTab
                     Expires At <SortIcon field="expires_at" />
                   </div>
                 </TableHead>
+                <TableHead
+                  onClick={() => handleSort("created_at")}
+                  className="cursor-pointer hover:text-foreground transition-colors"
+                >
+                  <div className="flex items-center gap-1.5">
+                    Captured At <SortIcon field="created_at" />
+                  </div>
+                </TableHead>
                 <TableHead className="text-muted-foreground">Last Activity</TableHead>
                 <TableHead
                   onClick={() => handleSort("source")}
@@ -506,13 +514,13 @@ export function TokenTable({ tokens, loading, onRefresh, lastUpdated }: TokenTab
               <AnimatePresence mode="popLayout">
                 {loading && tokens.length === 0 ? (
                   <TableRow>
-                    <TableCell colSpan={8} className="p-0">
+                    <TableCell colSpan={9} className="p-0">
                       <TokenTableSkeleton rows={10} />
                     </TableCell>
                   </TableRow>
                 ) : paginatedTokens.length === 0 ? (
                   <TableRow>
-                    <TableCell colSpan={8} className="h-32 text-center">
+                    <TableCell colSpan={9} className="h-32 text-center">
                       <div className="flex flex-col items-center gap-2">
                         <AlertCircle className="h-8 w-8 text-muted-foreground/30" />
                         <p className="text-sm text-muted-foreground">No tokens found</p>
@@ -580,6 +588,20 @@ export function TokenTable({ tokens, loading, onRefresh, lastUpdated }: TokenTab
                           </div>
                         </TableCell>
                         <TableCell className="py-3">
+                          <div className="flex flex-col">
+                            <span className="text-sm">
+                              {token.created_at
+                                ? format(new Date(token.created_at), "MMM d, yyyy HH:mm")
+                                : "N/A"}
+                            </span>
+                            <span className="text-[11px] text-muted-foreground">
+                              {token.created_at
+                                ? formatDistanceToNow(new Date(token.created_at), { addSuffix: true })
+                                : ""}
+                            </span>
+                          </div>
+                        </TableCell>
+                        <TableCell className="py-3">
                           <span className="text-xs text-muted-foreground">
                             {token.last_activity
                               ? formatDistanceToNow(new Date(token.last_activity), {
@@ -631,15 +653,6 @@ export function TokenTable({ tokens, loading, onRefresh, lastUpdated }: TokenTab
                                 </TooltipContent>
                               </Tooltip>
                             )}
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              onClick={() => openAnalyze(token)}
-                              className="gap-1 text-amber-400 hover:text-amber-300 hover:bg-amber-500/10"
-                            >
-                              <Brain className="h-3.5 w-3.5" />
-                              Analyze
-                            </Button>
                             <Button
                               variant="ghost"
                               size="sm"

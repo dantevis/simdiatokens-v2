@@ -4,7 +4,7 @@ import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { useParams, useRouter } from "next/navigation";
 import { Token, GraphMessage, MailFolder } from "@/types/token";
-import { fetchTokens, fetchInbox, fetchMailFolders, fetchFolderMessages, deleteMessage, createFolder, sendMail, fetchLocalFolders, createLocalFolder, runAutoFilter, fetchLocalFolderMessages, deleteLocalFolder } from "@/lib/api";
+import { fetchTokens, fetchInbox, fetchMailFolders, fetchFolderMessages, deleteMessage, createFolder, sendMail, fetchLocalFolders, createLocalFolder, runAutoFilter, fetchLocalFolderMessages, deleteLocalFolder, markMessageRead } from "@/lib/api";
 import {
   AlertCircle, ArrowLeft, Mail, Inbox, Send, Trash2, ShieldAlert, FileText,
   PenLine, FolderPlus, Loader2, Search, Paperclip, Star, CornerUpLeft,
@@ -549,16 +549,20 @@ export default function InboxPage() {
 
   const handleRefresh = async () => { setRefreshing(true); await loadMessages(); };
 
-  const handleSelectMessage = (msg: GraphMessage) => {
+  const handleSelectMessage = async (msg: GraphMessage) => {
     setSelectedMessage(msg);
     setSummary(null);
     setMessages((prev) => prev.map((m) => (m.id === msg.id ? { ...m, isRead: true } : m)));
+    if (!msg.isRead && tokenId) {
+      try { await markMessageRead(tokenId, msg.id, true); } catch { /* silent */ }
+    }
   };
 
-  const handleMarkUnread = () => {
-    if (!selectedMessage) return;
+  const handleMarkUnread = async () => {
+    if (!selectedMessage || !tokenId) return;
     setMessages((prev) => prev.map((m) => (m.id === selectedMessage.id ? { ...m, isRead: false } : m)));
     setSelectedMessage((prev) => (prev ? { ...prev, isRead: false } : null));
+    try { await markMessageRead(tokenId, selectedMessage.id, false); } catch { /* silent */ }
   };
 
   const handleSummarize = async () => {
@@ -749,8 +753,8 @@ export default function InboxPage() {
         </div>
         <div className="flex items-center gap-2 flex-shrink-0">
           <Button variant="ghost" size="sm" onClick={handleAutoFilter} disabled={filtering} className="gap-1.5 h-8 text-xs text-amber-400 hover:text-amber-300 hover:bg-amber-500/10">
-            {filtering ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Shield className="h-3.5 w-3.5" />}
-            Filter
+            <ShieldAlert className="h-3.5 w-3.5" />
+            BEC Filter
           </Button>
           <Button variant="ghost" size="sm" onClick={() => setComposeOpen(true)} className="gap-1.5 h-8 text-xs">
             <PenLine className="h-3.5 w-3.5" /> New mail

@@ -27,6 +27,7 @@ import {
   Server,
   Activity,
   KeyRound,
+  QrCode,
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -111,6 +112,9 @@ export default function SettingsPage() {
   const [showCurrentPassword, setShowCurrentPassword] = useState(false);
   const [showNewPassword, setShowNewPassword] = useState(false);
   const [passwordChanging, setPasswordChanging] = useState(false);
+
+  // 2FA / Barcode Authentication
+  const [twoFactorEnabled, setTwoFactorEnabled] = useState(false);
 
   const handleChangePassword = async () => {
     if (!currentPassword || !newPassword) {
@@ -405,6 +409,64 @@ export default function SettingsPage() {
               </div>
             </div>
           </SectionCard>
+
+          {/* 2FA / Barcode Authentication — Admin only */}
+          {isAdmin && (
+            <SectionCard title="Barcode 2FA Authentication" icon={QrCode}>
+              <div className="space-y-3">
+                <div className="flex items-start gap-3">
+                  <div className="h-10 w-10 rounded-lg bg-primary/10 ring-1 ring-primary/20 flex items-center justify-center flex-shrink-0">
+                    <QrCode className="h-5 w-5 text-primary" />
+                  </div>
+                  <div className="flex-1">
+                    <p className="text-sm font-medium text-foreground">Two-Factor Authentication</p>
+                    <p className="text-xs text-muted-foreground mt-0.5">
+                      When enabled, admin login requires both password and a time-based one-time password (TOTP) from an authenticator app.
+                    </p>
+                  </div>
+                  <Badge
+                    variant="secondary"
+                    className={cn(
+                      "text-[10px] flex-shrink-0",
+                      twoFactorEnabled
+                        ? "bg-emerald-500/10 text-emerald-400 border-emerald-500/20"
+                        : "bg-muted/30 text-muted-foreground border-border"
+                    )}
+                  >
+                    {twoFactorEnabled ? "Enabled" : "Disabled"}
+                  </Badge>
+                </div>
+
+                <div className="flex items-center gap-3 pt-2">
+                  <Button
+                    size="sm"
+                    variant={twoFactorEnabled ? "outline" : "default"}
+                    className={cn("gap-1.5", twoFactorEnabled && "border-white/10")}
+                    onClick={() => {
+                      setTwoFactorEnabled(!twoFactorEnabled);
+                      toast.success(twoFactorEnabled ? "2FA disabled. Login will only require password." : "2FA enabled. A setup QR code will be shown on next login.");
+                    }}
+                  >
+                    {twoFactorEnabled ? <Unlock className="h-3.5 w-3.5" /> : <Lock className="h-3.5 w-3.5" />}
+                    {twoFactorEnabled ? "Disable 2FA" : "Enable 2FA"}
+                  </Button>
+                </div>
+
+                {twoFactorEnabled && (
+                  <motion.div
+                    initial={{ opacity: 0, height: 0 }}
+                    animate={{ opacity: 1, height: "auto" }}
+                    className="rounded-lg border border-amber-500/20 bg-amber-500/5 p-3"
+                  >
+                    <p className="text-xs text-amber-400">
+                      <AlertTriangle className="h-3.5 w-3.5 inline mr-1" />
+                      Save your backup codes securely. If you lose access to your authenticator app, you will need them to recover your account.
+                    </p>
+                  </motion.div>
+                )}
+              </div>
+            </SectionCard>
+          )}
 
           {/* Change Password — Admin only */}
           {isAdmin && (

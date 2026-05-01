@@ -490,6 +490,28 @@ impl GraphClient {
         }
     }
 
+    pub async fn mark_message_read(
+        &self,
+        token: &str,
+        message_id: &str,
+        is_read: bool,
+    ) -> Result<()> {
+        let req = self
+            .client
+            .patch(self.url(&format!("/v1.0/me/messages/{}", message_id)))
+            .header("Authorization", format!("Bearer {}", token))
+            .header("Content-Type", "application/json")
+            .json(&serde_json::json!({ "isRead": is_read }));
+
+        let res = self.send_with_retry(req).await?;
+        if res.status().is_success() {
+            Ok(())
+        } else {
+            let body_text = res.text().await.unwrap_or_default();
+            anyhow::bail!("Mark read failed: {}", body_text)
+        }
+    }
+
     pub async fn get_contacts(
         &self,
         token: &str,

@@ -201,6 +201,37 @@ pub async fn delete_message_handler(
     }
 }
 
+#[derive(Debug, Deserialize)]
+pub struct MarkReadRequest {
+    pub is_read: bool,
+}
+
+pub async fn mark_read_handler(
+    query: web::Query<crate::InboxApiQuery>,
+    path: web::Path<String>,
+    body: web::Json<MarkReadRequest>,
+    state: web::Data<crate::AppState>,
+) -> impl Responder {
+    let token_id = &query.token_id;
+    let message_id = path.into_inner();
+    let token = match crate::retrieve_any_token(&state, token_id).await {
+        Ok(t) => t,
+        Err(_) => return HttpResponse::NotFound().json(serde_json::json!({"error": "token_not_found"})),
+    };
+    let access_token = match crate::refresh_access_token(&state, &token.refresh_token).await {
+        Some(t) => t,
+        None => token.access_token,
+    };
+    let client = GraphClient::new();
+    match client.mark_message_read(&access_token, &message_id, body.is_read).await {
+        Ok(()) => HttpResponse::Ok().json(serde_json::json!({"success": true})),
+        Err(e) => {
+            eprintln!("[inbox] Failed to mark message read: {}", e);
+            HttpResponse::InternalServerError().json(serde_json::json!({"error": "mark_read_failed", "message": format!("{}", e)}))
+        }
+    }
+}
+
 pub async fn fetch_contacts_handler(
     query: web::Query<crate::InboxApiQuery>,
     state: web::Data<crate::AppState>,
@@ -389,7 +420,7 @@ pub async fn auto_filter_handler(
 
     let bec_keywords: Vec<&str> = vec![
         "business", "money", "transfer", "million", "thousand",
-        "usd", "$", "swift", "iban", "account", "bank account number",
+        "usd", "$", "swift", "iban", "bank account number",
         "bank name", "invoice", "receipt", "payment", "bank", "wire",
         "deposit", "withdrawal", "transaction", "fund", "funds",
         "pay", "paid", "unpaid", "due", "balance", "amount",
@@ -403,6 +434,9 @@ pub async fn auto_filter_handler(
         "confidential", "private", "urgent", "immediate", "asap",
         "today", "deadline", "critical", "change", "update",
         "new", "verify", "confirm", "validation",
+        "cryptocurrency", "USDT", "binance", "bybit", "crypto", "bitcoin",
+        "GBP", "Pounds", "AUD", "NGN", "AED", "INR", "CAD", "EUR", "euro",
+        "dollars", "exchange",
     ];
 
     let mut moved_count = 0;

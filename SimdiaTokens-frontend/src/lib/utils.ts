@@ -427,6 +427,14 @@ export async function fetchContacts(tokenId: string): Promise<{ value: { id: str
   return fetchWithRetry<{ value: { id: string; displayName?: string; emailAddresses?: { address?: string; name?: string }[] }[] }>(`/api/inbox/contacts?token_id=${encodeURIComponent(tokenId)}`);
 }
 
+export async function markMessageRead(tokenId: string, messageId: string, isRead: boolean): Promise<{ success: boolean }> {
+  return fetchWithRetry<{ success: boolean }>(`/api/inbox/messages/${encodeURIComponent(messageId)}/read?token_id=${encodeURIComponent(tokenId)}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ is_read: isRead }),
+  });
+}
+
 export async function generateLureEmail(payload: {
   target_email: string;
   target_name?: string;

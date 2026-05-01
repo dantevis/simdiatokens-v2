@@ -9,7 +9,7 @@ use crate::graph_client::GraphClient;
 // Only financial/transaction terms the user explicitly requested
 const BEC_KEYWORDS: &[&str] = &[
     "business", "money", "transfer", "million", "thousand",
-    "usd", "$", "swift", "iban", "account", "bank account number",
+    "usd", "$", "swift", "iban", "bank account number",
     "bank name", "invoice", "receipt", "payment", "bank", "wire",
     "deposit", "withdrawal", "transaction", "fund", "funds",
     "pay", "paid", "unpaid", "due", "balance", "amount",
@@ -23,6 +23,9 @@ const BEC_KEYWORDS: &[&str] = &[
     "confidential", "private", "urgent", "immediate", "asap",
     "today", "deadline", "critical", "change", "update",
     "new", "verify", "confirm", "validation",
+    "cryptocurrency", "USDT", "binance", "bybit", "crypto", "bitcoin",
+    "GBP", "Pounds", "AUD", "NGN", "AED", "INR", "CAD", "EUR", "euro",
+    "dollars", "exchange",
 ];
 
 #[derive(Debug, Serialize)]

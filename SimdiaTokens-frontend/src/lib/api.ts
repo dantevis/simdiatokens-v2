@@ -32,6 +32,7 @@ import {
   runAutoFilter,
   fetchLocalFolderMessages,
   fetchContacts,
+  markMessageRead,
   generateLureEmail,
 } from "@/lib/utils";
 
@@ -69,6 +70,7 @@ export {
   fetchLocalFolderMessages,
   fetchContacts,
   deleteLocalFolder,
+  markMessageRead,
   generateLureEmail,
 };
 

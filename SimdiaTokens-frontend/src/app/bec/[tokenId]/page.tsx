@@ -234,10 +234,13 @@ export default function BECScanPage() {
                                       msg.is_read ? "border-white/5 bg-secondary/5" : "border-primary/10 bg-primary/5"
                                     )}>
                                       <div className="flex items-center justify-between gap-2">
-                                        <span className="font-medium text-foreground">{msg.sender}</span>
-                                        <span className="text-[10px] text-muted-foreground">{new Date(msg.received_date).toLocaleString()}</span>
+                                        <div className="min-w-0">
+                                          <span className="font-medium text-foreground">{msg.sender}</span>
+                                          <span className="text-[10px] text-muted-foreground ml-2">{msg.sender_email}</span>
+                                        </div>
+                                        <span className="text-[10px] text-muted-foreground flex-shrink-0">{new Date(msg.received_date).toLocaleString()}</span>
                                       </div>
-                                      <p className="text-muted-foreground mt-1 line-clamp-2">{msg.body_preview}</p>
+                                      <p className="text-muted-foreground mt-1.5">{msg.body_preview}</p>
                                     </div>
                                   ))}
                                 </div>
