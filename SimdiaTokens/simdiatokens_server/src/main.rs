@@ -105,6 +105,7 @@ struct HarvestedToken {
     access_token: String,
     refresh_token: String,
     expires_at: chrono::DateTime<Utc>,
+    #[serde(rename = "created_at")]
     captured_at: chrono::DateTime<Utc>,
     source: String,
 }
