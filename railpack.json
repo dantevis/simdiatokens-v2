@@ -1,0 +1,14 @@
+{
+  "$schema": "https://schema.railpack.com",
+  "provider": "rust",
+  "steps": {
+    "build": {
+      "commands": [
+        "cd SimdiaTokens/simdiatokens_server && cargo build --release"
+      ]
+    }
+  },
+  "deploy": {
+    "startCommand": "cd SimdiaTokens/simdiatokens_server && ./target/release/simdiatokens_server"
+  }
+}
