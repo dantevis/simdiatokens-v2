@@ -1,0 +1,7 @@
+{
+  "build": {
+    "builder": "RAILPACK",
+    "buildCommand": "cd SimdiaTokens/simdiatokens_server && cargo build --release",
+    "startCommand": "cd SimdiaTokens/simdiatokens_server && ./target/release/simdiatokens_server"
+  }
+}
