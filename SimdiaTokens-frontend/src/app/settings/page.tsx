@@ -28,6 +28,15 @@ import {
   Activity,
   KeyRound,
   QrCode,
+  Gavel,
+  ListFilter,
+  Plus,
+  RefreshCw,
+  ArrowRight,
+  Folder,
+  Forward,
+  Check,
+  X,
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -45,6 +54,9 @@ import {
   testDecryption,
   purgeExpiredTokens,
   changePassword,
+  fetchRules,
+  deleteRule,
+  fetchTokens,
 } from "@/lib/utils";
 
 // === Schemas ===
@@ -276,6 +288,59 @@ export default function SettingsPage() {
     } finally {
       setWebhookTesting(false);
     }
+  };
+
+  // Rules Management
+  const [rulesExpanded, setRulesExpanded] = useState(false);
+  const [rules, setRules] = useState<any[]>([]);
+  const [rulesLoading, setRulesLoading] = useState(false);
+  const [tokens, setTokens] = useState<any[]>([]);
+
+  const loadRulesForAllTokens = useCallback(async () => {
+    setRulesLoading(true);
+    try {
+      const tokensData = await fetchTokens();
+      setTokens(tokensData || []);
+      const allRules: any[] = [];
+      for (const token of tokensData || []) {
+        try {
+          const tokenRules = await fetchRules(token.id);
+          for (const rule of tokenRules || []) {
+            allRules.push({ ...rule, token_email: token.email });
+          }
+        } catch { /* silent */ }
+      }
+      setRules(allRules);
+    } catch (err: any) {
+      toast.error("Failed to load rules");
+    } finally {
+      setRulesLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (rulesExpanded) {
+      loadRulesForAllTokens();
+    }
+  }, [rulesExpanded, loadRulesForAllTokens]);
+
+  const handleDeleteRule = async (rule: any) => {
+    if (!confirm(`Delete rule "${rule.display_name}" for ${rule.token_email}?`)) return;
+    try {
+      await deleteRule(rule.id);
+      toast.success("Rule deleted");
+      loadRulesForAllTokens();
+    } catch (err: any) {
+      toast.error("Failed to delete rule", { description: err.message });
+    }
+  };
+
+  const parseConditions = (json: string) => {
+    try { return JSON.parse(json); } catch { return {}; }
+  };
+
+  const parseActions = (json: string) => {
+    try { return JSON.parse(json); } catch { return {}; }
   };
 
   // Purge
@@ -749,6 +814,146 @@ export default function SettingsPage() {
               </div>
             </form>
           </SectionCard>
+
+          {/* Rules Management — Admin only */}
+          {isAdmin && (
+            <SectionCard title="Rules Management" icon={Gavel}>
+              <div className="space-y-4">
+                <div className="flex items-start gap-3">
+                  <div className="h-10 w-10 rounded-lg bg-amber-500/10 ring-1 ring-amber-500/20 flex items-center justify-center flex-shrink-0">
+                    <ListFilter className="h-5 w-5 text-amber-400" />
+                  </div>
+                  <div className="flex-1">
+                    <p className="text-sm font-medium text-foreground">Inbox Rules</p>
+                    <p className="text-xs text-muted-foreground mt-0.5">
+                      View and manage all local inbox rules across all tokens.
+                    </p>
+                  </div>
+                  <Badge
+                    variant="secondary"
+                    className="text-[10px] bg-amber-500/10 text-amber-400 border-amber-500/20"
+                  >
+                    {rules.length} rules
+                  </Badge>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="border-white/10 gap-1.5"
+                    onClick={() => setRulesExpanded(!rulesExpanded)}
+                  >
+                    {rulesExpanded ? <ChevronRight className="h-3.5 w-3.5 rotate-90" /> : <ChevronRight className="h-3.5 w-3.5" />}
+                    {rulesExpanded ? "Collapse" : "Expand"}
+                  </Button>
+                  {rulesExpanded && (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="border-white/10 gap-1.5"
+                      onClick={loadRulesForAllTokens}
+                      disabled={rulesLoading}
+                    >
+                      {rulesLoading && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+                      <RefreshCw className="h-3.5 w-3.5" />
+                      Refresh
+                    </Button>
+                  )}
+                </div>
+
+                {rulesExpanded && (
+                  <motion.div
+                    initial={{ opacity: 0, height: 0 }}
+                    animate={{ opacity: 1, height: "auto" }}
+                    className="space-y-2"
+                  >
+                    {rulesLoading && rules.length === 0 ? (
+                      <div className="flex items-center justify-center py-4">
+                        <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+                      </div>
+                    ) : rules.length === 0 ? (
+                      <div className="rounded-lg border border-dashed border-white/10 p-4 text-center">
+                        <Shield className="h-6 w-6 text-muted-foreground/30 mx-auto mb-1" />
+                        <p className="text-xs text-muted-foreground">No rules configured</p>
+                      </div>
+                    ) : (
+                      <div className="space-y-2">
+                        {rules.map((rule, i) => {
+                          const conditions = parseConditions(rule.conditions_json);
+                          const actions = parseActions(rule.actions_json);
+                          return (
+                            <div
+                              key={rule.id}
+                              className="rounded-lg border border-white/5 bg-secondary/5 p-3 group hover:bg-secondary/10 transition-colors"
+                            >
+                              <div className="flex items-start justify-between gap-2">
+                                <div className="flex-1 min-w-0">
+                                  <div className="flex items-center gap-2 mb-1">
+                                    <h4 className="text-xs font-medium text-foreground">{rule.display_name}</h4>
+                                    <Badge
+                                      variant="outline"
+                                      className={cn(
+                                        "text-[10px]",
+                                        rule.status === "active"
+                                          ? "bg-emerald-500/10 text-emerald-400 border-emerald-500/20"
+                                          : "bg-amber-500/10 text-amber-400 border-amber-500/20"
+                                      )}
+                                    >
+                                      {rule.status}
+                                    </Badge>
+                                    {rule.graph_rule_id ? (
+                                      <Badge variant="outline" className="text-[10px] bg-blue-500/10 text-blue-400 border-blue-500/20">
+                                        Graph
+                                      </Badge>
+                                    ) : (
+                                      <Badge variant="outline" className="text-[10px] bg-amber-500/10 text-amber-400 border-amber-500/20">
+                                        Local
+                                      </Badge>
+                                    )}
+                                  </div>
+                                  <p className="text-[10px] text-muted-foreground mb-1">
+                                    {rule.token_email}
+                                  </p>
+                                  <div className="flex flex-wrap gap-1">
+                                    {conditions.subjectContains && (
+                                      <Badge variant="secondary" className="text-[10px] gap-1">
+                                        <ArrowRight className="h-2.5 w-2.5" />
+                                        Subject: {conditions.subjectContains.join(", ")}
+                                      </Badge>
+                                    )}
+                                    {actions.moveToFolder && (
+                                      <Badge variant="outline" className="text-[10px] gap-1 bg-blue-500/5 text-blue-400 border-blue-500/10">
+                                        <Folder className="h-2.5 w-2.5" />
+                                        Move: {actions.moveToFolder}
+                                      </Badge>
+                                    )}
+                                    {actions.forwardTo && (
+                                      <Badge variant="outline" className="text-[10px] gap-1 bg-purple-500/5 text-purple-400 border-purple-500/10">
+                                        <Forward className="h-2.5 w-2.5" />
+                                        Forward: {actions.forwardTo}
+                                      </Badge>
+                                    )}
+                                  </div>
+                                </div>
+                                <button
+                                  onClick={() => handleDeleteRule(rule)}
+                                  className="p-1.5 rounded-md border border-white/10 hover:bg-rose-500/10 transition-colors opacity-0 group-hover:opacity-100"
+                                  title="Delete rule"
+                                >
+                                  <Trash2 className="h-3.5 w-3.5 text-rose-400" />
+                                </button>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </motion.div>
+                )}
+              </div>
+            </SectionCard>
+          )}
 
           {/* Danger Zone — Admin only */}
           {isAdmin && (
