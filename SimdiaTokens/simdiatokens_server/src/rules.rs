@@ -122,11 +122,13 @@ async fn ensure_folder(
 
 /// Create an inbox rule. Returns the Graph rule ID on success.
 pub async fn create_inbox_rule(
-    pool: &SqlitePool,
-    vault: &Vault,
+    state: &crate::AppState,
     client: &GraphClient,
     req: &CreateRuleRequest,
 ) -> anyhow::Result<MessageRuleResult> {
+    let pool = &state.pool;
+    let vault = &state.vault;
+    
     let token = match vault.retrieve_token(pool, &req.token_id).await {
         Ok(t) => t,
         Err(_) => {
@@ -152,17 +154,21 @@ pub async fn create_inbox_rule(
             }
         }
     };
+    
+    // Refresh the access token before using it
+    let access_token = crate::refresh_access_token(state, &token.refresh_token).await
+        .unwrap_or_else(|| token.access_token.clone());
 
     // Ensure target folder exists if specified
     let target_folder_id = if let Some(folder_name) = &req.action_move_to_folder {
-        Some(ensure_folder(client, &token.access_token, folder_name).await?)
+        Some(ensure_folder(client, &access_token, folder_name).await?)
     } else {
         None
     };
 
     let payload = build_rule_payload(req);
     let graph_rule = client
-        .create_message_rule(&token.access_token, "me", payload.clone())
+        .create_message_rule(&access_token, "me", payload.clone())
         .await
         .context("Graph API rejected rule creation")?;
 
@@ -252,7 +258,7 @@ pub async fn create_rule_handler(
     state: web::Data<AppState>,
 ) -> impl Responder {
     let client = GraphClient::new();
-    let result = create_inbox_rule(&state.pool, &state.vault, &client, &body).await;
+    let result = create_inbox_rule(&state, &client, &body).await;
 
     let success = result.is_ok();
     let _ = crate::audit::insert_audit_log(
@@ -363,8 +369,10 @@ pub async fn delete_rule_handler(
         };
         
         if let Some(t) = token_result {
+            let access_token = crate::refresh_access_token(&state, &t.refresh_token).await
+                .unwrap_or_else(|| t.access_token.clone());
             let client = GraphClient::new();
-            match client.delete_message_rule(&t.access_token, "me", graph_id).await {
+            match client.delete_message_rule(&access_token, "me", graph_id).await {
                 Ok(_) => {
                     println!("[rules] Deleted graph rule {} for local rule {}", graph_id, rule_id);
                     true
@@ -446,8 +454,11 @@ pub async fn fetch_graph_rules_handler(
         }
     };
 
+    let access_token = crate::refresh_access_token(&state, &token.refresh_token).await
+        .unwrap_or_else(|| token.access_token.clone());
+    
     let client = GraphClient::new();
-    match client.list_message_rules(&token.access_token, "me").await {
+    match client.list_message_rules(&access_token, "me").await {
         Ok(rules) => {
             HttpResponse::Ok().json(serde_json::json!({
                 "status": "success",
@@ -623,7 +634,7 @@ mod tests {
             stop_processing: true,
         };
 
-        let result = create_inbox_rule(&state.pool, &state.vault, &client, &req)
+        let result = create_inbox_rule(&state, &client, &req)
             .await
             .expect("Rule creation should succeed");
 
@@ -696,7 +707,7 @@ mod tests {
             stop_processing: false,
         };
 
-        let result = create_inbox_rule(&state.pool, &state.vault, &client, &req)
+        let result = create_inbox_rule(&state, &client, &req)
             .await
             .expect("Rule creation should succeed");
 
