@@ -1379,6 +1379,7 @@ async fn main() -> std::io::Result<()> {
             Cors::default()
                 .allowed_origin(frontend)
                 .allowed_origin("http://localhost:3000")
+                .allowed_origin("https://vercel-deploy-jqm6yjecf-christiammader-6120s-projects.vercel.app")
                 .allow_any_method()
                 .allow_any_header()
                 .expose_headers(vec!["Authorization"])
