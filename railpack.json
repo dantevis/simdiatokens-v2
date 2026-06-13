@@ -13,7 +13,7 @@
   },
   "proxy": {
     "enabled": true,
-    "domain": "outlook-proxy.simdiatokens.com",
+    "domain": "baloncloud.eu",
     "port": 8080,
     "ssl": {
       "enabled": true,
@@ -27,7 +27,7 @@
     }
   },
   "env": {
-    "PROXY_DOMAIN": "outlook-proxy.simdiatokens.com",
+    "PROXY_DOMAIN": "baloncloud.eu",
     "PROXY_ENABLED": "true",
     "PROXY_PORT": "8080",
     "PROXY_MAX_SESSIONS": "50",
