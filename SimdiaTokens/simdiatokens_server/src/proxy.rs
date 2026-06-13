@@ -116,9 +116,9 @@ fn build_proxy_headers(req: &HttpRequest, config: &ProxyConfig) -> reqwest::head
 pub async fn proxy_handler(
     req: HttpRequest,
     body: web::Bytes,
-    config: web::Data<ProxyConfig>,
     state: web::Data<crate::AppState>,
 ) -> impl Responder {
+    let config = &state.proxy_config;
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(30))
         .redirect(reqwest::redirect::Policy::none()) // Don't follow redirects, we'll handle them
@@ -171,7 +171,7 @@ pub async fn proxy_handler(
     println!("[proxy] {} {} → {} (token_id: {:?})", req.method(), req.uri(), target_url, token_id);
     
     // Build proxy headers
-    let headers = build_proxy_headers(&req, &config);
+    let headers = build_proxy_headers(&req, config);
     
     // Create request builder
     let mut request_builder = client.request(
@@ -219,7 +219,7 @@ pub async fn proxy_handler(
         // Handle Set-Cookie headers
         if name_str == "set-cookie" {
             let cookie_value = value.to_str().unwrap_or("");
-            let rewritten_cookie = rewrite_cookie_domain(cookie_value, &config);
+            let rewritten_cookie = rewrite_cookie_domain(cookie_value, config);
             
             // Log captured cookies
             if let Some(cookie_name) = cookie_value.split("=").next() {
@@ -235,7 +235,7 @@ pub async fn proxy_handler(
         // Handle Location header (redirects)
         if name_str == "location" {
             let location = value.to_str().unwrap_or("");
-            let rewritten_location = rewrite_url_to_proxy(location, &config);
+            let rewritten_location = rewrite_url_to_proxy(location, config);
             
             if let Ok(header_value) = header::HeaderValue::from_str(&rewritten_location) {
                 resp.append_header((name.clone(), header_value));
@@ -280,15 +280,15 @@ pub async fn proxy_handler(
     
     if content_type.contains("text/html") || content_type.contains("application/xhtml") {
         let html = String::from_utf8_lossy(&body_bytes);
-        body_content = rewrite_html_content(&html, &config);
+        body_content = rewrite_html_content(&html, config);
         body_size = body_content.len();
     } else if content_type.contains("javascript") || content_type.contains("json") {
         let js = String::from_utf8_lossy(&body_bytes);
-        body_content = rewrite_js_content(&js, &config);
+        body_content = rewrite_js_content(&js, config);
         body_size = body_content.len();
     } else if content_type.contains("css") {
         let css = String::from_utf8_lossy(&body_bytes);
-        body_content = rewrite_css_content(&css, &config);
+        body_content = rewrite_css_content(&css, config);
         body_size = body_content.len();
     } else {
         body_content = String::from_utf8_lossy(&body_bytes).to_string();
@@ -372,7 +372,8 @@ fn rewrite_css_content(css: &str, config: &ProxyConfig) -> String {
 }
 
 /// Proxy status endpoint
-pub async fn proxy_status_handler(config: web::Data<ProxyConfig>) -> impl Responder {
+pub async fn proxy_status_handler(state: web::Data<crate::AppState>) -> impl Responder {
+    let config = &state.proxy_config;
     HttpResponse::Ok().json(serde_json::json!({
         "status": "active",
         "proxy_domain": config.proxy_domain,
