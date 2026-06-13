@@ -13,6 +13,9 @@ export interface Token {
   category?: string;
   account_type?: "consumer" | "enterprise" | string;
   last_refreshed_at?: string;
+  session_status?: "active" | "pending" | "expired" | "killed" | string;
+  session_active_at?: string;
+  session_killed_at?: string;
 }
 
 export interface GraphMessage {

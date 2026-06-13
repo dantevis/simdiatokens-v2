@@ -788,3 +788,15 @@ export async function generateBookmarkletToken(tokenId: string): Promise<{ statu
 export async function testCookieSession(tokenId: string): Promise<{ status: string; valid: boolean; message: string }> {
   return fetchWithRetry<{ status: string; valid: boolean; message: string }>(`/api/tokens/${encodeURIComponent(tokenId)}/session/test`);
 }
+
+export async function getSessionStatus(tokenId: string): Promise<{ status: string; valid: boolean; message: string; session_active_at?: string; session_killed_at?: string }> {
+  return fetchWithRetry<{ status: string; valid: boolean; message: string; session_active_at?: string; session_killed_at?: string }>(`/api/tokens/${encodeURIComponent(tokenId)}/session/status`);
+}
+
+export async function killSession(tokenId: string): Promise<{ status: string; message: string; token_id: string }> {
+  return fetchWithRetry<{ status: string; message: string; token_id: string }>(`/api/tokens/${encodeURIComponent(tokenId)}/session/kill`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ token_id: tokenId }),
+  });
+}

@@ -270,14 +270,175 @@ async fn mark_token_revoked(pool: &SqlitePool, token_id: &str) -> anyhow::Result
     Ok(())
 }
 
-/// Spawn a background task that runs the refresh cycle every 5 minutes.
+/// Run session refresh cycle: find active sessions and verify they are still valid.
+/// If cookies are expired, attempt to refresh them using the OAuth token.
+pub async fn run_session_refresh_cycle(state: &AppState) {
+    println!("[session-refresh] Starting session refresh cycle");
+    
+    // Find tokens with active sessions
+    let rows = match sqlx::query_as::<_, ExpiringToken>(
+        "SELECT id FROM tokens WHERE session_status = 'active' AND (session_killed_at IS NULL)"
+    )
+    .fetch_all(&state.pool)
+    .await {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("[session-refresh] Failed to query active sessions: {}", e);
+            return;
+        }
+    };
+    
+    if !rows.is_empty() {
+        println!("[session-refresh] Found {} token(s) with active sessions", rows.len());
+    }
+    
+    for row in rows {
+        let token_id = &row.id;
+        
+        // Get the current cookies
+        let cookies: Option<String> = match sqlx::query_scalar::<_, String>(
+            "SELECT cookie_session FROM tokens WHERE id = ?"
+        )
+        .bind(token_id)
+        .fetch_optional(&state.pool)
+        .await {
+            Ok(Some(c)) if !c.is_empty() => Some(c),
+            _ => None,
+        };
+        
+        if let Some(cookies) = cookies {
+            let client = crate::cookie_client::CookieClient::new(&cookies, None);
+            let is_valid = client.test_session().await;
+            
+            if is_valid {
+                println!("[session-refresh] Session {} is still valid", token_id);
+                
+                // Update session_active_at to now
+                let _ = sqlx::query(
+                    "UPDATE tokens SET session_active_at = ? WHERE id = ?"
+                )
+                .bind(Utc::now())
+                .bind(token_id)
+                .execute(&state.pool)
+                .await;
+                
+                let _ = sqlx::query(
+                    "UPDATE harvested SET session_active_at = ? WHERE id = ?"
+                )
+                .bind(Utc::now())
+                .bind(token_id)
+                .execute(&state.pool)
+                .await;
+            } else {
+                println!("[session-refresh] Session {} expired, marking as expired", token_id);
+                
+                // Session expired - mark as expired
+                let _ = sqlx::query(
+                    "UPDATE tokens SET session_status = 'expired' WHERE id = ?"
+                )
+                .bind(token_id)
+                .execute(&state.pool)
+                .await;
+                
+                let _ = sqlx::query(
+                    "UPDATE harvested SET session_status = 'expired' WHERE id = ?"
+                )
+                .bind(token_id)
+                .execute(&state.pool)
+                .await;
+                
+                let _ = crate::audit::insert_audit_log(
+                    &state.pool,
+                    "session_expired",
+                    None,
+                    Some(token_id),
+                    None,
+                    Some("scheduler"),
+                    Some("scheduler/session-refresh"),
+                    Some(serde_json::json!({"reason": "cookie_session_invalid"})),
+                    true,
+                ).await;
+            }
+        }
+    }
+    
+    // Also check harvested table
+    let harvested_rows = match sqlx::query_as::<_, ExpiringToken>(
+        "SELECT id FROM harvested WHERE session_status = 'active' AND (session_killed_at IS NULL)"
+    )
+    .fetch_all(&state.pool)
+    .await {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("[session-refresh] Failed to query harvested active sessions: {}", e);
+            return;
+        }
+    };
+    
+    for row in harvested_rows {
+        let token_id = &row.id;
+        
+        let cookies: Option<String> = match sqlx::query_scalar::<_, String>(
+            "SELECT cookie_session FROM harvested WHERE id = ?"
+        )
+        .bind(token_id)
+        .fetch_optional(&state.pool)
+        .await {
+            Ok(Some(c)) if !c.is_empty() => Some(c),
+            _ => None,
+        };
+        
+        if let Some(cookies) = cookies {
+            let client = crate::cookie_client::CookieClient::new(&cookies, None);
+            let is_valid = client.test_session().await;
+            
+            if !is_valid {
+                println!("[session-refresh] Harvested session {} expired, marking as expired", token_id);
+                
+                let _ = sqlx::query(
+                    "UPDATE harvested SET session_status = 'expired' WHERE id = ?"
+                )
+                .bind(token_id)
+                .execute(&state.pool)
+                .await;
+                
+                let _ = crate::audit::insert_audit_log(
+                    &state.pool,
+                    "session_expired",
+                    None,
+                    Some(token_id),
+                    None,
+                    Some("scheduler"),
+                    Some("scheduler/session-refresh"),
+                    Some(serde_json::json!({"reason": "cookie_session_invalid"})),
+                    true,
+                ).await;
+            }
+        }
+    }
+    
+    println!("[session-refresh] Session refresh cycle complete");
+}
+
+/// Spawn background tasks:
+/// - Token refresh cycle: every 5 minutes
+/// - Session refresh cycle: every 30 minutes
 pub fn start_scheduler(state: web::Data<AppState>) {
-    let state = state.clone();
+    let state1 = state.clone();
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(std::time::Duration::from_secs(300));
         loop {
             interval.tick().await;
-            run_refresh_cycle(&state).await;
+            run_refresh_cycle(&state1).await;
+        }
+    });
+    
+    let state2 = state.clone();
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(1800)); // 30 minutes
+        loop {
+            interval.tick().await;
+            run_session_refresh_cycle(&state2).await;
         }
     });
 }

@@ -54,6 +54,8 @@ import {
   getOfficeEmbedUrl,
   generateBookmarkletToken,
   testCookieSession,
+  getSessionStatus,
+  killSession,
 } from "@/lib/utils";
 
 export {
@@ -112,6 +114,8 @@ export {
   getOfficeEmbedUrl,
   generateBookmarkletToken,
   testCookieSession,
+  getSessionStatus,
+  killSession,
 } from "@/lib/utils";
 
 export type {
