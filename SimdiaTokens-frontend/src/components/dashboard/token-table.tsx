@@ -99,25 +99,29 @@ export function TokenTable({ tokens, loading, onRefresh, lastUpdated }: TokenTab
         router.push(base);
         break;
       case "ONEDRIVE":
-        window.open(`https://onedrive.live.com/?auth=2`, "_blank");
+        // Open OneDrive view within our dashboard using the token
+        router.push(`${base}?view=onedrive`);
         break;
       case "TEAMS":
+        // Open Teams in a new tab (Teams requires special handling)
         window.open(`https://teams.microsoft.com`, "_blank");
         break;
       case "ADMIN":
         router.push(`/recon/${token.id}`);
         break;
       case "EXCHANGE":
-        router.push(`/recon/${token.id}`);
+        // Open Exchange admin center (mail flow rules) within our dashboard
+        router.push(`/rules/${token.id}`);
         break;
       case "WORD":
-        window.open(`https://word.new`, "_blank");
+        // Open Office apps view within our dashboard
+        router.push(`${base}?view=office&app=word`);
         break;
       case "EXCEL":
-        window.open(`https://excel.new`, "_blank");
+        router.push(`${base}?view=office&app=excel`);
         break;
       case "POWERPOINT":
-        window.open(`https://powerpoint.new`, "_blank");
+        router.push(`${base}?view=office&app=powerpoint`);
         break;
     }
   };

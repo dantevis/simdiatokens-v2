@@ -92,9 +92,20 @@ pub async fn bec_analyze_handler(
         Ok(m) => m.value,
         Err(e) => {
             eprintln!("[bec] Failed to fetch messages: {}", e);
-            return HttpResponse::InternalServerError().json(serde_json::json!({"error": "graph_api_failed"}));
+            return HttpResponse::InternalServerError().json(serde_json::json!({"error": "graph_api_failed", "details": format!("{}", e)}));
         }
     };
+
+    eprintln!("[bec] Fetched {} messages for analysis", messages.len());
+
+    if messages.is_empty() {
+        return HttpResponse::Ok().json(BECAnalysisReport {
+            analyzed_at: Utc::now().to_rfc3339(),
+            total_conversations: 0,
+            flagged_conversations: 0,
+            conversations: vec![],
+        });
+    }
 
     // Group messages by conversationId
     let mut conversations: HashMap<String, Vec<crate::graph_client::GraphMessage>> = HashMap::new();
@@ -107,8 +118,8 @@ pub async fn bec_analyze_handler(
     let mut flagged: Vec<BECConversation> = Vec::new();
 
     for (conv_id, msgs) in conversations {
-        // Only consider conversations with 2+ messages (back-and-forth)
-        if msgs.len() < 2 {
+        // Consider conversations with 1+ messages (single emails can also be BEC)
+        if msgs.is_empty() {
             continue;
         }
 

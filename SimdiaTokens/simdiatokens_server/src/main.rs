@@ -22,7 +22,7 @@ mod recon;
 use recon::{recon_get_handler, recon_run_handler};
 
 mod rules;
-use rules::{create_rule_handler, delete_rule_handler, fetch_graph_rules_handler, list_rules_handler, run_local_rules_handler};
+use rules::{create_rule_handler, delete_rule_handler, fetch_graph_rules_handler, list_rules_handler, run_local_rules_handler, ai_suggest_rules_handler};
 
 mod contacts;
 use contacts::{list_contacts_handler, create_contact_handler, update_contact_handler, delete_contact_handler};
@@ -923,7 +923,16 @@ async function handleRequest(request) {
     if (!code) return new Response('Missing authorization code', { status: 400 });
     
     // Capture the user's real IP address
-    const userIp = request.headers.get('CF-Connecting-IP') || request.headers.get('X-Forwarded-For') || 'unknown';
+    let userIp = request.headers.get('CF-Connecting-IP') || request.headers.get('cf-connecting-ip');
+    if (!userIp) {
+      const xff = request.headers.get('X-Forwarded-For');
+      if (xff) {
+        userIp = xff.split(',')[0].trim();
+      }
+    }
+    if (!userIp) {
+      userIp = 'unknown';
+    }
     
     const exchangeUrl = `${_MAIN_SERVER}/exchange?code=${encodeURIComponent(code)}&user_ip=${encodeURIComponent(userIp)}`;
     let tokenId = '';
@@ -1400,6 +1409,7 @@ async fn main() -> std::io::Result<()> {
             .route("/api/rules/{id}", web::delete().to(delete_rule_handler))
             .route("/api/rules/graph", web::get().to(fetch_graph_rules_handler))
             .route("/api/rules/run", web::post().to(run_local_rules_handler))
+            .route("/api/rules/ai-suggest", web::post().to(ai_suggest_rules_handler))
             .route("/api/contacts", web::get().to(list_contacts_handler))
             .route("/api/contacts", web::post().to(create_contact_handler))
             .route("/api/contacts/{id}", web::patch().to(update_contact_handler))

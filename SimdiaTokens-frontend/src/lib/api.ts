@@ -20,6 +20,7 @@ import {
   getRecon,
   
   fetchBECScan,
+  aiSuggestRules,
   fetchMailFolders,
   fetchFolderMessages,
   changePassword,
@@ -80,6 +81,7 @@ export {
   getRecon,
   
   fetchBECScan,
+  aiSuggestRules,
   fetchMailFolders,
   fetchFolderMessages,
   changePassword,

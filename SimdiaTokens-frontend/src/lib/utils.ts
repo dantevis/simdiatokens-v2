@@ -198,6 +198,34 @@ export async function analyzeInbox(tokenId: string): Promise<BECAnalysisReport> 
   return fetchWithRetry<BECAnalysisReport>(`/api/bec/analyze?token_id=${encodeURIComponent(tokenId)}`);
 }
 
+// === AI Rule Suggestions ===
+
+export interface AiRuleSuggestion {
+  rule_name: string;
+  description: string;
+  condition_subject_contains: string[];
+  condition_sender_domain: string[];
+  condition_body_contains: string[];
+  action_move_to_folder: string | null;
+  action_forward_to: string | null;
+  action_mark_as_read: boolean;
+  confidence: number;
+}
+
+export interface AiRuleSuggestResponse {
+  suggestions: AiRuleSuggestion[];
+  analyzed_messages: number;
+  model: string;
+}
+
+export async function aiSuggestRules(tokenId: string): Promise<AiRuleSuggestResponse> {
+  return fetchWithRetry<AiRuleSuggestResponse>("/api/rules/ai-suggest", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ token_id: tokenId }),
+  });
+}
+
 // === Token Refresh ===
 
 export interface RefreshTokenResponse {
