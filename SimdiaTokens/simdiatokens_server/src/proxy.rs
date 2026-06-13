@@ -114,12 +114,6 @@ fn build_proxy_headers(req: &HttpRequest, config: &ProxyConfig) -> reqwest::head
         reqwest::header::HeaderValue::from_static("https"),
     );
     
-    // Prevent server from sending compressed responses (we can't rewrite gzip)
-    headers.insert(
-        "Accept-Encoding",
-        reqwest::header::HeaderValue::from_static("identity"),
-    );
-    
     headers
 }
 
