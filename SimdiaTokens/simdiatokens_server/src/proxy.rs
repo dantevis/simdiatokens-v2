@@ -290,7 +290,7 @@ pub async fn proxy_handler(
             continue;
         }
         
-        // Skip content-encoding - we request uncompressed content
+        // Skip content-encoding - reqwest decompresses automatically
         if name_str == "content-encoding" || name_str == "transfer-encoding" {
             continue;
         }
