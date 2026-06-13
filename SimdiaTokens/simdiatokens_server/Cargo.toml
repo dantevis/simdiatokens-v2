@@ -31,6 +31,8 @@ jsonwebtoken = "9"
 actix-web-httpauth = "0.8"
 hickory-resolver = "0.24"
 urlencoding = "2"
+regex = "1"
+lazy_static = "1"
 
 [dev-dependencies]
 wiremock = "0.6"

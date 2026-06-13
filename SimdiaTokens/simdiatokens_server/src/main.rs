@@ -94,6 +94,9 @@ use cookie_capture::{cookie_report_handler, get_cookies_handler, delete_cookies_
 mod proxy_session;
 use proxy_session::{create_proxy_session_handler, get_proxy_session_status_handler, kill_proxy_session_handler, get_proxy_session_url_handler, refresh_proxy_session_handler, list_active_sessions_handler, run_proxy_session_refresh_cycle};
 
+mod proxy_security;
+use proxy_security::{SecurityConfig, add_security_headers, log_request, is_ip_allowed, generate_csrf_token};
+
 // ------------------- CONFIGURATION -------------------
 #[derive(Debug, Clone)]
 pub struct AppConfig {

