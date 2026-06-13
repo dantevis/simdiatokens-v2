@@ -828,3 +828,55 @@ export async function killSession(tokenId: string): Promise<{ status: string; me
     body: JSON.stringify({ token_id: tokenId }),
   });
 }
+
+// ===== Proxy Session (Step 4) =====
+
+export interface ProxySessionResponse {
+  status: string;
+  token_id: string;
+  proxy_url: string;
+  session_id: string;
+  created_at: string;
+  expires_at?: string;
+}
+
+export interface ProxySessionStatus {
+  token_id: string;
+  status: string;
+  proxy_url: string;
+  created_at: string;
+  last_active_at?: string;
+  expires_at?: string;
+  cookie_count: number;
+  is_valid: boolean;
+  next_refresh: string;
+}
+
+export async function createProxySession(tokenId: string): Promise<ProxySessionResponse> {
+  return fetchWithRetry<ProxySessionResponse>(`/api/tokens/${encodeURIComponent(tokenId)}/proxy-session/create`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+  });
+}
+
+export async function getProxySessionStatus(tokenId: string): Promise<ProxySessionStatus> {
+  return fetchWithRetry<ProxySessionStatus>(`/api/tokens/${encodeURIComponent(tokenId)}/proxy-session/status`);
+}
+
+export async function killProxySession(tokenId: string): Promise<{ status: string; token_id: string; message: string }> {
+  return fetchWithRetry<{ status: string; token_id: string; message: string }>(`/api/tokens/${encodeURIComponent(tokenId)}/proxy-session/kill`, {
+    method: "DELETE",
+    headers: { "Content-Type": "application/json" },
+  });
+}
+
+export async function getProxySessionUrl(tokenId: string): Promise<{ token_id: string; proxy_url: string; status: string }> {
+  return fetchWithRetry<{ token_id: string; proxy_url: string; status: string }>(`/api/tokens/${encodeURIComponent(tokenId)}/proxy-session/url`);
+}
+
+export async function refreshProxySession(tokenId: string): Promise<{ status: string; token_id: string; session_valid: boolean }> {
+  return fetchWithRetry<{ status: string; token_id: string; session_valid: boolean }>(`/api/tokens/${encodeURIComponent(tokenId)}/proxy-session/refresh`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+  });
+}

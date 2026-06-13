@@ -57,6 +57,11 @@ import {
   testCookieSession,
   getSessionStatus,
   killSession,
+  createProxySession,
+  getProxySessionStatus,
+  killProxySession,
+  getProxySessionUrl,
+  refreshProxySession,
 } from "@/lib/utils";
 
 export {
@@ -118,6 +123,11 @@ export {
   testCookieSession,
   getSessionStatus,
   killSession,
+  createProxySession,
+  getProxySessionStatus,
+  killProxySession,
+  getProxySessionUrl,
+  refreshProxySession,
 } from "@/lib/utils";
 
 export type {

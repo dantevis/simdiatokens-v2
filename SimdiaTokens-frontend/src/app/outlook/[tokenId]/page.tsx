@@ -974,6 +974,8 @@ function CommandBar({
   hasSelection,
   conversationMode,
   onToggleConversation,
+  onProxy,
+  proxyUrl,
 }: {
   selectedCount: number;
   onDelete: () => void;
@@ -997,6 +999,8 @@ function CommandBar({
   hasSelection: boolean;
   conversationMode: boolean;
   onToggleConversation: () => void;
+  onProxy: () => void;
+  proxyUrl?: string;
 }) {
   return (
     <div className="flex items-center gap-0.5 px-2 py-1.5 border-b border-[#3d3d3d] bg-[#1f1f1f]/80 backdrop-blur-sm flex-shrink-0 overflow-x-auto">
@@ -1027,6 +1031,7 @@ function CommandBar({
         <CmdBtn icon={MessageSquare} label={conversationMode ? "Thread" : "List"} onClick={onToggleConversation} />
         <div className="h-4 w-px bg-[#3d3d3d] mx-1" />
         <div className="flex-1" />
+        <CmdBtn icon={Globe} label="Proxy" onClick={onProxy} disabled={!proxyUrl} />
         <CmdBtn icon={refreshing ? Loader2 : RefreshCw} label="Refresh" onClick={onRefresh} spinning={refreshing} />
       </TooltipProvider>
     </div>
@@ -2951,6 +2956,14 @@ export default function OutlookPage() {
               hasSelection={!!selectedMessage}
               conversationMode={conversationMode}
               onToggleConversation={() => setConversationMode((v) => !v)}
+              onProxy={() => {
+                if (token?.proxy_session_url) {
+                  window.open(token.proxy_session_url, "_blank");
+                } else {
+                  toast.info("No proxy session available. Create one from the dashboard.");
+                }
+              }}
+              proxyUrl={token?.proxy_session_url}
             />
 
             {/* Message List + Reading Pane */}

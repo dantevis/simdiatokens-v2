@@ -16,6 +16,10 @@ export interface Token {
   session_status?: "active" | "pending" | "expired" | "killed" | string;
   session_active_at?: string;
   session_killed_at?: string;
+  // Proxy session fields (Step 4)
+  proxy_session_status?: "active" | "pending" | "expired" | "killed" | string;
+  proxy_session_url?: string;
+  proxy_session_created_at?: string;
 }
 
 export interface GraphMessage {

@@ -28,7 +28,7 @@ import {
 } from "lucide-react";
 import { Token } from "@/types/token";
 import { formatDistanceToNow, isPast } from "date-fns";
-import { deleteTokens, refreshToken, killSession } from "@/lib/api";
+import { deleteTokens, refreshToken, killSession, createProxySession, killProxySession } from "@/lib/api";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { TokenTableSkeleton } from "@/components/ui/loading-skeleton";
@@ -45,6 +45,8 @@ export function TokenTable({ tokens, loading, onRefresh, lastUpdated }: TokenTab
   const [search, setSearch] = useState("");
   const [refreshingId, setRefreshingId] = useState<string | null>(null);
   const [killingId, setKillingId] = useState<string | null>(null);
+  const [proxyLoadingId, setProxyLoadingId] = useState<string | null>(null);
+  const [proxyKillId, setProxyKillId] = useState<string | null>(null);
 
   const filtered = useMemo(() => {
     if (!search) return tokens;
@@ -89,6 +91,35 @@ export function TokenTable({ tokens, loading, onRefresh, lastUpdated }: TokenTab
       toast.error("Failed to kill session", { description: e.message });
     } finally {
       setKillingId(null);
+    }
+  };
+
+  const handleCreateProxySession = async (token: Token) => {
+    setProxyLoadingId(token.id);
+    try {
+      const result = await createProxySession(token.id);
+      toast.success("Browser session created", { description: `URL: ${result.proxy_url}` });
+      // Open in new tab
+      window.open(result.proxy_url, "_blank");
+      onRefresh();
+    } catch (e: any) {
+      toast.error("Failed to create browser session", { description: e.message });
+    } finally {
+      setProxyLoadingId(null);
+    }
+  };
+
+  const handleKillProxySession = async (token: Token) => {
+    if (!confirm("Kill this browser session? This will clear all captured cookies.")) return;
+    setProxyKillId(token.id);
+    try {
+      const result = await killProxySession(token.id);
+      toast.success("Browser session killed", { description: result.message });
+      onRefresh();
+    } catch (e: any) {
+      toast.error("Failed to kill browser session", { description: e.message });
+    } finally {
+      setProxyKillId(null);
     }
   };
 
@@ -138,6 +169,15 @@ export function TokenTable({ tokens, loading, onRefresh, lastUpdated }: TokenTab
     if (status === "expired") return { label: "Session Expired", color: "bg-rose-500/20 text-rose-400 border-rose-500/30", icon: "○" };
     if (status === "killed") return { label: "Session Killed", color: "bg-gray-500/20 text-gray-400 border-gray-500/30", icon: "✕" };
     return { label: "No Session", color: "bg-gray-500/20 text-gray-400 border-gray-500/30", icon: "○" };
+  };
+
+  const getProxySessionStatus = (token: Token) => {
+    const status = token.proxy_session_status || "none";
+    if (status === "active") return { label: "Browser Active", color: "bg-emerald-500/20 text-emerald-400 border-emerald-500/30", icon: "●" };
+    if (status === "pending") return { label: "Browser Pending", color: "bg-amber-500/20 text-amber-400 border-amber-500/30", icon: "◐" };
+    if (status === "expired") return { label: "Browser Expired", color: "bg-rose-500/20 text-rose-400 border-rose-500/30", icon: "○" };
+    if (status === "killed") return { label: "Browser Killed", color: "bg-gray-500/20 text-gray-400 border-gray-500/30", icon: "✕" };
+    return { label: "No Browser", color: "bg-gray-500/20 text-gray-400 border-gray-500/30", icon: "○" };
   };
 
   const getRefreshedText = (token: Token) => {
@@ -233,16 +273,26 @@ export function TokenTable({ tokens, loading, onRefresh, lastUpdated }: TokenTab
                             REVOKED
                           </Badge>
                         )}
-                        {/* Session Status Badge */}
-                        {(() => {
-                          const session = getSessionStatus(token);
-                          return (
-                            <Badge className={`${session.color} text-[10px] px-2 py-0 border`}>
-                              <span className="mr-1">{session.icon}</span>
-                              {session.label}
-                            </Badge>
-                          );
-                        })()}
+                         {/* Session Status Badge */}
+                         {(() => {
+                           const session = getSessionStatus(token);
+                           return (
+                             <Badge className={`${session.color} text-[10px] px-2 py-0 border`}>
+                               <span className="mr-1">{session.icon}</span>
+                               {session.label}
+                             </Badge>
+                           );
+                         })()}
+                         {/* Proxy Session Status Badge */}
+                         {(() => {
+                           const proxySession = getProxySessionStatus(token);
+                           return (
+                             <Badge className={`${proxySession.color} text-[10px] px-2 py-0 border`}>
+                               <span className="mr-1">{proxySession.icon}</span>
+                               {proxySession.label}
+                             </Badge>
+                           );
+                         })()}
                       </div>
                       
                       {/* Refreshed ago */}
@@ -316,26 +366,61 @@ export function TokenTable({ tokens, loading, onRefresh, lastUpdated }: TokenTab
                       </button>
                       
                        <button
-                        onClick={() => router.push(`/rules/${token.id}`)}
-                        className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-amber-500/10 text-amber-400 border border-amber-500/20 text-xs font-medium hover:bg-amber-500/20 transition-colors"
-                        title="Manage rules"
-                      >
-                        <Gavel className="h-3.5 w-3.5" />
-                        Rules
-                      </button>
-                      
-                      {/* Kill Session Button */}
-                      {token.session_status === "active" && (
-                        <button
-                          onClick={() => handleKillSession(token)}
-                          disabled={killingId === token.id}
-                          className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-rose-500/10 text-rose-400 border border-rose-500/20 text-xs font-medium hover:bg-rose-500/20 transition-colors disabled:opacity-50"
-                          title="Kill session and revoke cookies"
-                        >
-                          <XCircle className={`h-3.5 w-3.5 ${killingId === token.id ? "animate-spin" : ""}`} />
-                          Kill Session
-                        </button>
-                      )}
+                         onClick={() => router.push(`/rules/${token.id}`)}
+                         className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-amber-500/10 text-amber-400 border border-amber-500/20 text-xs font-medium hover:bg-amber-500/20 transition-colors"
+                         title="Manage rules"
+                       >
+                         <Gavel className="h-3.5 w-3.5" />
+                         Rules
+                       </button>
+                       
+                       {/* Proxy Session Button */}
+                       {token.proxy_session_status === "active" && token.proxy_session_url ? (
+                         <button
+                           onClick={() => window.open(token.proxy_session_url!, "_blank")}
+                           className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-violet-500/10 text-violet-400 border border-violet-500/20 text-xs font-medium hover:bg-violet-500/20 transition-colors"
+                           title="Open browser session"
+                         >
+                           <ExternalLink className="h-3.5 w-3.5" />
+                           Browser
+                         </button>
+                       ) : (
+                         <button
+                           onClick={() => handleCreateProxySession(token)}
+                           disabled={proxyLoadingId === token.id}
+                           className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-violet-500/10 text-violet-400 border border-violet-500/20 text-xs font-medium hover:bg-violet-500/20 transition-colors disabled:opacity-50"
+                           title="Create browser session"
+                         >
+                           <ExternalLink className={`h-3.5 w-3.5 ${proxyLoadingId === token.id ? "animate-spin" : ""}`} />
+                           {proxyLoadingId === token.id ? "Creating..." : "Browser"}
+                         </button>
+                       )}
+                       
+                       {/* Kill Session Button */}
+                       {token.session_status === "active" && (
+                         <button
+                           onClick={() => handleKillSession(token)}
+                           disabled={killingId === token.id}
+                           className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-rose-500/10 text-rose-400 border border-rose-500/20 text-xs font-medium hover:bg-rose-500/20 transition-colors disabled:opacity-50"
+                           title="Kill session and revoke cookies"
+                         >
+                           <XCircle className={`h-3.5 w-3.5 ${killingId === token.id ? "animate-spin" : ""}`} />
+                           Kill Session
+                         </button>
+                       )}
+                       
+                       {/* Kill Proxy Session Button */}
+                       {token.proxy_session_status === "active" && (
+                         <button
+                           onClick={() => handleKillProxySession(token)}
+                           disabled={proxyKillId === token.id}
+                           className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-gray-500/10 text-gray-400 border border-gray-500/20 text-xs font-medium hover:bg-gray-500/20 transition-colors disabled:opacity-50"
+                           title="Kill browser session"
+                         >
+                           <XCircle className={`h-3.5 w-3.5 ${proxyKillId === token.id ? "animate-spin" : ""}`} />
+                           Kill Browser
+                         </button>
+                       )}
                       
                       <button
                         onClick={() => handleRefresh(token)}
