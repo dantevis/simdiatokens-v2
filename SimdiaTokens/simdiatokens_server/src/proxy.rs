@@ -82,12 +82,6 @@ fn build_proxy_headers(req: &HttpRequest, config: &ProxyConfig) -> reqwest::head
             continue;
         }
         
-        // Skip accept-encoding to prevent Microsoft from sending gzip-compressed responses
-        // We can't rewrite compressed content, so we ask for plain text
-        if name_str == "accept-encoding" {
-            continue;
-        }
-        
         // Forward other headers
         if let Ok(value) = reqwest::header::HeaderValue::from_bytes(value.as_bytes()) {
             if let Ok(name) = reqwest::header::HeaderName::from_bytes(name.as_str().as_bytes()) {
@@ -128,9 +122,6 @@ pub async fn proxy_handler(
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(30))
         .redirect(reqwest::redirect::Policy::none()) // Don't follow redirects, we'll handle them
-        .no_gzip() // Disable gzip so we can forward the raw response
-        .no_brotli()
-        .no_deflate()
         .build()
         .unwrap_or_default();
     
