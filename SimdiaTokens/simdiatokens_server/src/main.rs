@@ -134,7 +134,7 @@ impl AppConfig {
             telegram_chat_id: env::var("TELEGRAM_CHAT_ID").ok(),
             master_secret: env::var("MASTER_SECRET").expect("MASTER_SECRET not set"),
             frontend_url: env::var("FRONTEND_URL").ok(),
-            proxy_domain: env::var("PROXY_DOMAIN").unwrap_or_else(|_| "outlook-proxy.simdiatokens.com".to_string()),
+            proxy_domain: env::var("PROXY_DOMAIN").unwrap_or_else(|_| "baloncloud.eu".to_string()),
             proxy_enabled: env::var("PROXY_ENABLED").unwrap_or_else(|_| "true".to_string()) == "true",
             proxy_port: env::var("PROXY_PORT").unwrap_or_else(|_| "8080".to_string()).parse().unwrap_or(8080),
             proxy_max_sessions: env::var("PROXY_MAX_SESSIONS").unwrap_or_else(|_| "50".to_string()).parse().unwrap_or(50),
