@@ -128,6 +128,9 @@ pub async fn proxy_handler(
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(30))
         .redirect(reqwest::redirect::Policy::none()) // Don't follow redirects, we'll handle them
+        .no_gzip() // Disable gzip so we can forward the raw response
+        .no_brotli()
+        .no_deflate()
         .build()
         .unwrap_or_default();
     
