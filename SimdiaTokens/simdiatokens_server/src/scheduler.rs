@@ -270,12 +270,12 @@ async fn mark_token_revoked(pool: &SqlitePool, token_id: &str) -> anyhow::Result
     Ok(())
 }
 
-/// Run session refresh cycle: find active sessions and verify they are still valid.
-/// If cookies are expired, attempt to refresh them using the OAuth token.
+/// Run session refresh cycle: verify OAuth tokens are still valid by attempting refresh.
+/// Token-based session: OAuth token IS the session. If token refresh fails, session is dead.
 pub async fn run_session_refresh_cycle(state: &AppState) {
-    println!("[session-refresh] Starting session refresh cycle");
+    println!("[session-refresh] Starting token-based session refresh cycle");
     
-    // Find tokens with active sessions
+    // Find active tokens and verify they can still be refreshed
     let rows = match sqlx::query_as::<_, ExpiringToken>(
         "SELECT id FROM tokens WHERE session_status = 'active' AND (session_killed_at IS NULL)"
     )
@@ -295,70 +295,86 @@ pub async fn run_session_refresh_cycle(state: &AppState) {
     for row in rows {
         let token_id = &row.id;
         
-        // Get the current cookies
-        let cookies: Option<String> = match sqlx::query_scalar::<_, String>(
-            "SELECT cookie_session FROM tokens WHERE id = ?"
-        )
-        .bind(token_id)
-        .fetch_optional(&state.pool)
-        .await {
-            Ok(Some(c)) if !c.is_empty() => Some(c),
-            _ => None,
+        // Try to refresh the token - if it fails, session is dead
+        let token = match state.vault.retrieve_token(&state.pool, token_id).await {
+            Ok(t) => t,
+            Err(e) => {
+                eprintln!("[session-refresh] Failed to retrieve token {}: {}", token_id, e);
+                continue;
+            }
         };
         
-        if let Some(cookies) = cookies {
-            let client = crate::cookie_client::CookieClient::new(&cookies, None);
-            let is_valid = client.test_session().await;
-            
-            if is_valid {
-                println!("[session-refresh] Session {} is still valid", token_id);
-                
-                // Update session_active_at to now
-                let _ = sqlx::query(
-                    "UPDATE tokens SET session_active_at = ? WHERE id = ?"
-                )
-                .bind(Utc::now())
-                .bind(token_id)
-                .execute(&state.pool)
-                .await;
-                
-                let _ = sqlx::query(
-                    "UPDATE harvested SET session_active_at = ? WHERE id = ?"
-                )
-                .bind(Utc::now())
-                .bind(token_id)
-                .execute(&state.pool)
-                .await;
-            } else {
-                println!("[session-refresh] Session {} expired, marking as expired", token_id);
-                
-                // Session expired - mark as expired
-                let _ = sqlx::query(
-                    "UPDATE tokens SET session_status = 'expired' WHERE id = ?"
-                )
-                .bind(token_id)
-                .execute(&state.pool)
-                .await;
-                
-                let _ = sqlx::query(
-                    "UPDATE harvested SET session_status = 'expired' WHERE id = ?"
-                )
-                .bind(token_id)
-                .execute(&state.pool)
-                .await;
-                
-                let _ = crate::audit::insert_audit_log(
-                    &state.pool,
-                    "session_expired",
-                    None,
-                    Some(token_id),
-                    None,
-                    Some("scheduler"),
-                    Some("scheduler/session-refresh"),
-                    Some(serde_json::json!({"reason": "cookie_session_invalid"})),
-                    true,
-                ).await;
+        // Attempt token refresh to verify session validity
+        let params = [
+            ("client_id", state.config.client_id.as_str()),
+            ("client_secret", state.config.client_secret.as_str()),
+            ("grant_type", "refresh_token"),
+            ("refresh_token", token.refresh_token.as_str()),
+        ];
+        
+        let res = match state.http_client
+            .post("https://login.microsoftonline.com/common/oauth2/v2.0/token")
+            .form(&params)
+            .send()
+            .await
+        {
+            Ok(r) => r,
+            Err(e) => {
+                eprintln!("[session-refresh] HTTP error for token {}: {}", token_id, e);
+                continue;
             }
+        };
+        
+        if res.status().is_success() {
+            println!("[session-refresh] Token {} session is valid", token_id);
+            
+            // Update session_active_at
+            let _ = sqlx::query(
+                "UPDATE tokens SET session_active_at = ? WHERE id = ?"
+            )
+            .bind(Utc::now())
+            .bind(token_id)
+            .execute(&state.pool)
+            .await;
+            
+            let _ = sqlx::query(
+                "UPDATE harvested SET session_active_at = ? WHERE id = ?"
+            )
+            .bind(Utc::now())
+            .bind(token_id)
+            .execute(&state.pool)
+            .await;
+        } else {
+            let status = res.status();
+            let body = res.text().await.unwrap_or_default();
+            println!("[session-refresh] Token {} session expired: HTTP {} - {}", token_id, status, body);
+            
+            // Session expired - mark as expired
+            let _ = sqlx::query(
+                "UPDATE tokens SET session_status = 'expired' WHERE id = ?"
+            )
+            .bind(token_id)
+            .execute(&state.pool)
+            .await;
+            
+            let _ = sqlx::query(
+                "UPDATE harvested SET session_status = 'expired' WHERE id = ?"
+            )
+            .bind(token_id)
+            .execute(&state.pool)
+            .await;
+            
+            let _ = crate::audit::insert_audit_log(
+                &state.pool,
+                "session_expired",
+                None,
+                Some(token_id),
+                Some(&token.user_email),
+                Some("scheduler"),
+                Some("scheduler/session-refresh"),
+                Some(serde_json::json!({"reason": "token_refresh_failed", "status": status.as_u16()})),
+                true,
+            ).await;
         }
     }
     
@@ -378,46 +394,63 @@ pub async fn run_session_refresh_cycle(state: &AppState) {
     for row in harvested_rows {
         let token_id = &row.id;
         
-        let cookies: Option<String> = match sqlx::query_scalar::<_, String>(
-            "SELECT cookie_session FROM harvested WHERE id = ?"
-        )
-        .bind(token_id)
-        .fetch_optional(&state.pool)
-        .await {
-            Ok(Some(c)) if !c.is_empty() => Some(c),
-            _ => None,
-        };
-        
-        if let Some(cookies) = cookies {
-            let client = crate::cookie_client::CookieClient::new(&cookies, None);
-            let is_valid = client.test_session().await;
-            
-            if !is_valid {
-                println!("[session-refresh] Harvested session {} expired, marking as expired", token_id);
-                
-                let _ = sqlx::query(
-                    "UPDATE harvested SET session_status = 'expired' WHERE id = ?"
+        // Check if harvested token has a corresponding vault token
+        let vault_token = match state.vault.retrieve_token(&state.pool, token_id).await {
+            Ok(t) => t,
+            Err(_) => {
+                // No vault token - check if harvested token is expired
+                let row: Option<(String, chrono::DateTime<Utc>)> = sqlx::query_as(
+                    "SELECT id, expires_at FROM harvested WHERE id = ?"
                 )
                 .bind(token_id)
-                .execute(&state.pool)
-                .await;
+                .fetch_optional(&state.pool)
+                .await
+                .unwrap_or(None);
                 
-                let _ = crate::audit::insert_audit_log(
-                    &state.pool,
-                    "session_expired",
-                    None,
-                    Some(token_id),
-                    None,
-                    Some("scheduler"),
-                    Some("scheduler/session-refresh"),
-                    Some(serde_json::json!({"reason": "cookie_session_invalid"})),
-                    true,
-                ).await;
+                if let Some((_, expires_at)) = row {
+                    if Utc::now() > expires_at {
+                        println!("[session-refresh] Harvested token {} expired", token_id);
+                        let _ = sqlx::query(
+                            "UPDATE harvested SET session_status = 'expired' WHERE id = ?"
+                        )
+                        .bind(token_id)
+                        .execute(&state.pool)
+                        .await;
+                    }
+                }
+                continue;
             }
+        };
+        
+        // Try to refresh
+        let params = [
+            ("client_id", state.config.client_id.as_str()),
+            ("client_secret", state.config.client_secret.as_str()),
+            ("grant_type", "refresh_token"),
+            ("refresh_token", vault_token.refresh_token.as_str()),
+        ];
+        
+        let res = match state.http_client
+            .post("https://login.microsoftonline.com/common/oauth2/v2.0/token")
+            .form(&params)
+            .send()
+            .await
+        {
+            Ok(r) => r,
+            Err(_) => continue,
+        };
+        
+        if !res.status().is_success() {
+            let _ = sqlx::query(
+                "UPDATE harvested SET session_status = 'expired' WHERE id = ?"
+            )
+            .bind(token_id)
+            .execute(&state.pool)
+            .await;
         }
     }
     
-    println!("[session-refresh] Session refresh cycle complete");
+    println!("[session-refresh] Token-based session refresh cycle complete");
 }
 
 /// Spawn background tasks:

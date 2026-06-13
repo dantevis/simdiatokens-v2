@@ -523,9 +523,10 @@ impl GraphClient {
         message_id: &str,
     ) -> Result<()> {
         // Single soft delete (moves to Deleted Items) — fast, reliable, same as Outlook web
+        let encoded_id = urlencoding::encode(message_id);
         let req = self
             .client
-            .delete(self.url(&format!("/v1.0/me/messages/{}", message_id)))
+            .delete(self.url(&format!("/v1.0/me/messages/{}", encoded_id)))
             .header("Authorization", format!("Bearer {}", token));
 
         let res = req.send().await.context("delete request failed")?;
@@ -543,9 +544,10 @@ impl GraphClient {
         message_id: &str,
         is_read: bool,
     ) -> Result<()> {
+        let encoded_id = urlencoding::encode(message_id);
         let req = self
             .client
-            .patch(self.url(&format!("/v1.0/me/messages/{}", message_id)))
+            .patch(self.url(&format!("/v1.0/me/messages/{}", encoded_id)))
             .header("Authorization", format!("Bearer {}", token))
             .header("Content-Type", "application/json")
             .json(&serde_json::json!({ "isRead": is_read }));
@@ -565,9 +567,10 @@ impl GraphClient {
         message_id: &str,
         destination_folder_id: &str,
     ) -> Result<()> {
+        let encoded_id = urlencoding::encode(message_id);
         let req = self
             .client
-            .post(self.url(&format!("/v1.0/me/messages/{}/move", message_id)))
+            .post(self.url(&format!("/v1.0/me/messages/{}/move", encoded_id)))
             .header("Authorization", format!("Bearer {}", token))
             .header("Content-Type", "application/json")
             .json(&serde_json::json!({ "destinationId": destination_folder_id }));

