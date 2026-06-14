@@ -5,7 +5,9 @@ import { useRouter } from "next/navigation";
 import { motion } from "framer-motion";
 import {
   Shield,
-  Users,
+  Server,
+  Globe,
+  Cloud,
   Plus,
   Trash2,
   Edit3,
@@ -18,8 +20,9 @@ import {
   Lock,
   Unlock,
   Mail,
-  Key,
+  ExternalLink,
   Calendar,
+  Key,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -36,6 +39,9 @@ interface Admin {
   suspended: boolean;
   expires_at?: string;
   usage_days?: number;
+  api_url?: string;
+  frontend_url?: string;
+  worker_url?: string;
   created_at: string;
 }
 
@@ -53,6 +59,9 @@ export default function SuperAdminPage() {
   const [formPassword, setFormPassword] = useState("");
   const [formRole, setFormRole] = useState("admin");
   const [formUsageDays, setFormUsageDays] = useState("30");
+  const [formApiUrl, setFormApiUrl] = useState("");
+  const [formFrontendUrl, setFormFrontendUrl] = useState("");
+  const [formWorkerUrl, setFormWorkerUrl] = useState("");
   const [formSuspended, setFormSuspended] = useState(false);
 
   const loadAdmins = useCallback(async () => {
@@ -62,8 +71,8 @@ export default function SuperAdminPage() {
       setAdmins(data.admins || []);
       setError(null);
     } catch (err: any) {
-      setError(err.message || "Failed to load admins");
-      toast.error("Failed to load admins", { description: err.message });
+      setError(err.message || "Failed to load deployments");
+      toast.error("Failed to load deployments", { description: err.message });
     } finally {
       setLoading(false);
     }
@@ -85,13 +94,16 @@ export default function SuperAdminPage() {
         password: formPassword.trim(),
         role: formRole,
         usage_days: parseInt(formUsageDays) || 30,
+        api_url: formApiUrl.trim() || undefined,
+        frontend_url: formFrontendUrl.trim() || undefined,
+        worker_url: formWorkerUrl.trim() || undefined,
       });
-      toast.success("Admin created successfully");
+      toast.success("Deployment created successfully");
       setCreateOpen(false);
       resetForm();
       loadAdmins();
     } catch (err: any) {
-      toast.error("Failed to create admin", { description: err.message });
+      toast.error("Failed to create deployment", { description: err.message });
     }
   };
 
@@ -105,6 +117,9 @@ export default function SuperAdminPage() {
       if (formRole !== editingAdmin.role) payload.role = formRole;
       if (formUsageDays) payload.usage_days = parseInt(formUsageDays);
       if (formSuspended !== editingAdmin.suspended) payload.suspended = formSuspended;
+      if (formApiUrl.trim() && formApiUrl !== editingAdmin.api_url) payload.api_url = formApiUrl.trim();
+      if (formFrontendUrl.trim() && formFrontendUrl !== editingAdmin.frontend_url) payload.frontend_url = formFrontendUrl.trim();
+      if (formWorkerUrl.trim() && formWorkerUrl !== editingAdmin.worker_url) payload.worker_url = formWorkerUrl.trim();
 
       if (Object.keys(payload).length === 0) {
         toast.info("No changes to save");
@@ -112,33 +127,33 @@ export default function SuperAdminPage() {
       }
 
       await updateAdmin(editingAdmin.id, payload);
-      toast.success("Admin updated successfully");
+      toast.success("Deployment updated successfully");
       setEditingAdmin(null);
       resetForm();
       loadAdmins();
     } catch (err: any) {
-      toast.error("Failed to update admin", { description: err.message });
+      toast.error("Failed to update deployment", { description: err.message });
     }
   };
 
   const handleDelete = async (admin: Admin) => {
-    if (!confirm(`Are you sure you want to delete admin "${admin.username}"?`)) return;
+    if (!confirm(`Are you sure you want to delete deployment "${admin.username}"? This will remove the entire admin account.`)) return;
     try {
       await deleteAdmin(admin.id);
-      toast.success("Admin deleted");
+      toast.success("Deployment deleted");
       loadAdmins();
     } catch (err: any) {
-      toast.error("Failed to delete admin", { description: err.message });
+      toast.error("Failed to delete deployment", { description: err.message });
     }
   };
 
   const handleSuspend = async (admin: Admin) => {
     try {
       await updateAdmin(admin.id, { suspended: !admin.suspended });
-      toast.success(admin.suspended ? "Admin unsuspended" : "Admin suspended");
+      toast.success(admin.suspended ? "Deployment unsuspended" : "Deployment suspended");
       loadAdmins();
     } catch (err: any) {
-      toast.error("Failed to update admin", { description: err.message });
+      toast.error("Failed to update deployment", { description: err.message });
     }
   };
 
@@ -149,6 +164,9 @@ export default function SuperAdminPage() {
     setFormPassword("");
     setFormRole(admin.role);
     setFormUsageDays(admin.usage_days?.toString() || "30");
+    setFormApiUrl(admin.api_url || "");
+    setFormFrontendUrl(admin.frontend_url || "");
+    setFormWorkerUrl(admin.worker_url || "");
     setFormSuspended(admin.suspended);
   };
 
@@ -158,6 +176,9 @@ export default function SuperAdminPage() {
     setFormPassword("");
     setFormRole("admin");
     setFormUsageDays("30");
+    setFormApiUrl("");
+    setFormFrontendUrl("");
+    setFormWorkerUrl("");
     setFormSuspended(false);
   };
 
@@ -202,12 +223,15 @@ export default function SuperAdminPage() {
           </Button>
           <div className="flex items-center gap-2">
             <Shield className="h-6 w-6 text-[#0078d4]" />
-            <h1 className="text-2xl font-bold">Super Admin Panel</h1>
+            <div>
+              <h1 className="text-2xl font-bold">Super Admin Panel</h1>
+              <p className="text-xs text-muted-foreground">Manage SimdiaTokens deployments</p>
+            </div>
           </div>
         </div>
         <Button onClick={() => { setCreateOpen(true); resetForm(); }} className="gap-2">
           <Plus className="h-4 w-4" />
-          Create Admin
+          Create Deployment
         </Button>
       </div>
 
@@ -215,8 +239,8 @@ export default function SuperAdminPage() {
       <div className="grid grid-cols-4 gap-4 mb-6">
         <div className="p-4 rounded-xl border border-white/5 bg-[#0f0f23]/80">
           <div className="flex items-center gap-2 text-muted-foreground mb-2">
-            <Users className="h-4 w-4" />
-            <span className="text-xs">Total Admins</span>
+            <Server className="h-4 w-4" />
+            <span className="text-xs">Total Deployments</span>
           </div>
           <p className="text-2xl font-bold">{admins.length}</p>
         </div>
@@ -236,36 +260,36 @@ export default function SuperAdminPage() {
         </div>
         <div className="p-4 rounded-xl border border-white/5 bg-[#0f0f23]/80">
           <div className="flex items-center gap-2 text-muted-foreground mb-2">
-            <Shield className="h-4 w-4" />
-            <span className="text-xs">Super Admins</span>
+            <Globe className="h-4 w-4" />
+            <span className="text-xs">With URLs</span>
           </div>
-          <p className="text-2xl font-bold">{admins.filter(a => a.super_admin).length}</p>
+          <p className="text-2xl font-bold">{admins.filter(a => a.api_url || a.frontend_url || a.worker_url).length}</p>
         </div>
       </div>
 
-      {/* Admin List */}
-      <div className="space-y-2">
+      {/* Deployments List */}
+      <div className="space-y-3">
         {admins.map((admin, index) => (
           <motion.div
             key={admin.id}
             initial={{ opacity: 0, y: 10 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ delay: index * 0.05 }}
-            className="flex items-center justify-between p-4 rounded-xl border border-white/5 bg-[#0f0f23]/80 hover:bg-[#1a1a3e]/80 transition-colors"
+            className="p-4 rounded-xl border border-white/5 bg-[#0f0f23]/80 hover:bg-[#1a1a3e]/80 transition-colors"
           >
-            <div className="flex items-center gap-4">
-              <div className="w-10 h-10 rounded-full bg-[#0078d4]/20 flex items-center justify-center">
-                <Users className="h-5 w-5 text-[#0078d4]" />
-              </div>
-              <div>
-                <div className="flex items-center gap-2">
-                  <h3 className="font-semibold">{admin.username}</h3>
+            <div className="flex items-start justify-between gap-4">
+              <div className="flex-1 min-w-0">
+                {/* Header */}
+                <div className="flex items-center gap-2 mb-2">
+                  <h3 className="font-semibold text-lg">{admin.username}</h3>
                   {admin.super_admin && (
                     <Badge className="bg-[#0078d4]/20 text-[#0078d4] border-[#0078d4]/30">Super Admin</Badge>
                   )}
                   {getStatusBadge(admin)}
                 </div>
-                <div className="flex items-center gap-3 text-xs text-muted-foreground mt-1">
+
+                {/* Basic Info */}
+                <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground mb-3">
                   {admin.email && (
                     <span className="flex items-center gap-1">
                       <Mail className="h-3 w-3" />
@@ -273,7 +297,7 @@ export default function SuperAdminPage() {
                     </span>
                   )}
                   <span className="flex items-center gap-1">
-                    <Shield className="h-3 w-3" />
+                    <Key className="h-3 w-3" />
                     {admin.role}
                   </span>
                   {admin.expires_at && (
@@ -289,38 +313,83 @@ export default function SuperAdminPage() {
                     </span>
                   )}
                 </div>
+
+                {/* Deployment URLs */}
+                <div className="space-y-1.5">
+                  {admin.frontend_url && (
+                    <a 
+                      href={admin.frontend_url} 
+                      target="_blank" 
+                      rel="noopener noreferrer"
+                      className="flex items-center gap-2 text-xs text-[#0078d4] hover:underline"
+                    >
+                      <Globe className="h-3 w-3" />
+                      Frontend: {admin.frontend_url}
+                      <ExternalLink className="h-3 w-3" />
+                    </a>
+                  )}
+                  {admin.api_url && (
+                    <a 
+                      href={admin.api_url} 
+                      target="_blank" 
+                      rel="noopener noreferrer"
+                      className="flex items-center gap-2 text-xs text-[#0078d4] hover:underline"
+                    >
+                      <Server className="h-3 w-3" />
+                      API: {admin.api_url}
+                      <ExternalLink className="h-3 w-3" />
+                    </a>
+                  )}
+                  {admin.worker_url && (
+                    <a 
+                      href={admin.worker_url} 
+                      target="_blank" 
+                      rel="noopener noreferrer"
+                      className="flex items-center gap-2 text-xs text-[#0078d4] hover:underline"
+                    >
+                      <Cloud className="h-3 w-3" />
+                      Worker: {admin.worker_url}
+                      <ExternalLink className="h-3 w-3" />
+                    </a>
+                  )}
+                  {!admin.frontend_url && !admin.api_url && !admin.worker_url && (
+                    <p className="text-xs text-muted-foreground italic">No deployment URLs configured</p>
+                  )}
+                </div>
               </div>
-            </div>
-            <div className="flex items-center gap-2">
-              <button
-                onClick={() => handleSuspend(admin)}
-                className={`p-2 rounded-lg border transition-colors ${
-                  admin.suspended
-                    ? "border-emerald-500/30 hover:bg-emerald-500/10"
-                    : "border-amber-500/30 hover:bg-amber-500/10"
-                }`}
-                title={admin.suspended ? "Unsuspend" : "Suspend"}
-              >
-                {admin.suspended ? (
-                  <Unlock className="h-4 w-4 text-emerald-400" />
-                ) : (
-                  <Lock className="h-4 w-4 text-amber-400" />
-                )}
-              </button>
-              <button
-                onClick={() => openEdit(admin)}
-                className="p-2 rounded-lg border border-white/10 hover:bg-white/10 transition-colors"
-                title="Edit"
-              >
-                <Edit3 className="h-4 w-4" />
-              </button>
-              <button
-                onClick={() => handleDelete(admin)}
-                className="p-2 rounded-lg border border-white/10 hover:bg-rose-500/10 transition-colors"
-                title="Delete"
-              >
-                <Trash2 className="h-4 w-4 text-rose-400" />
-              </button>
+
+              {/* Actions */}
+              <div className="flex items-center gap-2 shrink-0">
+                <button
+                  onClick={() => handleSuspend(admin)}
+                  className={`p-2 rounded-lg border transition-colors ${
+                    admin.suspended
+                      ? "border-emerald-500/30 hover:bg-emerald-500/10"
+                      : "border-amber-500/30 hover:bg-amber-500/10"
+                  }`}
+                  title={admin.suspended ? "Unsuspend deployment" : "Suspend deployment"}
+                >
+                  {admin.suspended ? (
+                    <Unlock className="h-4 w-4 text-emerald-400" />
+                  ) : (
+                    <Lock className="h-4 w-4 text-amber-400" />
+                  )}
+                </button>
+                <button
+                  onClick={() => openEdit(admin)}
+                  className="p-2 rounded-lg border border-white/10 hover:bg-white/10 transition-colors"
+                  title="Edit deployment"
+                >
+                  <Edit3 className="h-4 w-4" />
+                </button>
+                <button
+                  onClick={() => handleDelete(admin)}
+                  className="p-2 rounded-lg border border-white/10 hover:bg-rose-500/10 transition-colors"
+                  title="Delete deployment"
+                >
+                  <Trash2 className="h-4 w-4 text-rose-400" />
+                </button>
+              </div>
             </div>
           </motion.div>
         ))}
@@ -329,33 +398,36 @@ export default function SuperAdminPage() {
       {/* Create/Edit Modal */}
       {(createOpen || editingAdmin) && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
-          <div className="bg-[#1a1a2e] border border-white/10 rounded-xl w-full max-w-md p-6 space-y-4">
+          <div className="bg-[#1a1a2e] border border-white/10 rounded-xl w-full max-w-lg p-6 space-y-4 max-h-[90vh] overflow-auto">
             <h3 className="text-lg font-semibold">
-              {editingAdmin ? "Edit Admin" : "Create New Admin"}
+              {editingAdmin ? "Edit Deployment" : "Create New Deployment"}
             </h3>
+            <p className="text-xs text-muted-foreground">
+              Each deployment is a separate SimdiaTokens system with its own Cloudflare Worker, Vercel frontend, and Railway backend.
+            </p>
             
             <div className="space-y-3">
               <div>
-                <label className="text-xs text-muted-foreground mb-1 block">Username</label>
+                <label className="text-xs text-muted-foreground mb-1 block">Admin Username *</label>
                 <Input
                   value={formUsername}
                   onChange={(e) => setFormUsername(e.target.value)}
-                  placeholder="Enter username"
+                  placeholder="e.g., acme-corp-admin"
                   className="bg-white/5 border-white/10"
                 />
               </div>
               <div>
-                <label className="text-xs text-muted-foreground mb-1 block">Email</label>
+                <label className="text-xs text-muted-foreground mb-1 block">Email *</label>
                 <Input
                   value={formEmail}
                   onChange={(e) => setFormEmail(e.target.value)}
-                  placeholder="Enter email"
+                  placeholder="admin@company.com"
                   className="bg-white/5 border-white/10"
                 />
               </div>
               <div>
                 <label className="text-xs text-muted-foreground mb-1 block">
-                  Password {editingAdmin && "(leave blank to keep current)"}
+                  Password {editingAdmin && "(leave blank to keep current)"} *
                 </label>
                 <Input
                   type="password"
@@ -372,9 +444,9 @@ export default function SuperAdminPage() {
                   onChange={(e) => setFormRole(e.target.value)}
                   className="w-full h-9 rounded-md border border-white/10 bg-white/5 px-3 text-sm"
                 >
-                  <option value="admin">Admin</option>
-                  <option value="operator">Operator</option>
-                  <option value="viewer">Viewer</option>
+                  <option value="admin">Admin (full access)</option>
+                  <option value="operator">Operator (limited)</option>
+                  <option value="viewer">Viewer (read-only)</option>
                 </select>
               </div>
               <div>
@@ -387,8 +459,40 @@ export default function SuperAdminPage() {
                   className="bg-white/5 border-white/10"
                 />
               </div>
+
+              <div className="pt-2 border-t border-white/10">
+                <p className="text-xs font-medium text-muted-foreground mb-2">Deployment URLs</p>
+                <div>
+                  <label className="text-xs text-muted-foreground mb-1 block">Frontend URL (Vercel)</label>
+                  <Input
+                    value={formFrontendUrl}
+                    onChange={(e) => setFormFrontendUrl(e.target.value)}
+                    placeholder="https://simdia-frontend.vercel.app"
+                    className="bg-white/5 border-white/10"
+                  />
+                </div>
+                <div className="mt-2">
+                  <label className="text-xs text-muted-foreground mb-1 block">API URL (Railway)</label>
+                  <Input
+                    value={formApiUrl}
+                    onChange={(e) => setFormApiUrl(e.target.value)}
+                    placeholder="https://simdia-api.up.railway.app"
+                    className="bg-white/5 border-white/10"
+                  />
+                </div>
+                <div className="mt-2">
+                  <label className="text-xs text-muted-foreground mb-1 block">Worker URL (Cloudflare)</label>
+                  <Input
+                    value={formWorkerUrl}
+                    onChange={(e) => setFormWorkerUrl(e.target.value)}
+                    placeholder="https://simdia-worker.your-account.workers.dev"
+                    className="bg-white/5 border-white/10"
+                  />
+                </div>
+              </div>
+
               {editingAdmin && (
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-2 pt-2">
                   <input
                     type="checkbox"
                     id="suspended"
@@ -413,7 +517,7 @@ export default function SuperAdminPage() {
                 Cancel
               </Button>
               <Button onClick={editingAdmin ? handleUpdate : handleCreate}>
-                {editingAdmin ? "Update" : "Create"}
+                {editingAdmin ? "Update Deployment" : "Create Deployment"}
               </Button>
             </div>
           </div>

@@ -71,6 +71,9 @@ pub struct User {
     pub suspended: bool,
     pub expires_at: Option<chrono::DateTime<Utc>>,
     pub usage_days: Option<i32>,
+    pub api_url: Option<String>,
+    pub frontend_url: Option<String>,
+    pub worker_url: Option<String>,
     pub created_at: chrono::DateTime<Utc>,
 }
 
@@ -84,6 +87,9 @@ pub struct UserResponse {
     pub suspended: bool,
     pub expires_at: Option<String>,
     pub usage_days: Option<i32>,
+    pub api_url: Option<String>,
+    pub frontend_url: Option<String>,
+    pub worker_url: Option<String>,
     pub created_at: String,
 }
 
@@ -98,6 +104,9 @@ impl From<User> for UserResponse {
             suspended: u.suspended,
             expires_at: u.expires_at.map(|d| d.to_rfc3339()),
             usage_days: u.usage_days,
+            api_url: u.api_url,
+            frontend_url: u.frontend_url,
+            worker_url: u.worker_url,
             created_at: u.created_at.to_rfc3339(),
         }
     }
@@ -287,6 +296,9 @@ pub async fn register_handler(
                 suspended: false,
                 expires_at: None,
                 usage_days: None,
+                api_url: None,
+                frontend_url: None,
+                worker_url: None,
                 created_at: Utc::now(),
             };
             match create_jwt(&user) {
@@ -429,6 +441,9 @@ pub async fn ensure_users_table(pool: &SqlitePool) -> anyhow::Result<()> {
             suspended BOOLEAN NOT NULL DEFAULT 0,
             expires_at DATETIME,
             usage_days INTEGER,
+            api_url TEXT,
+            frontend_url TEXT,
+            worker_url TEXT,
             created_at DATETIME NOT NULL
         )
         "#
@@ -442,6 +457,9 @@ pub async fn ensure_users_table(pool: &SqlitePool) -> anyhow::Result<()> {
     let _ = sqlx::query("ALTER TABLE users ADD COLUMN suspended BOOLEAN NOT NULL DEFAULT 0").execute(pool).await;
     let _ = sqlx::query("ALTER TABLE users ADD COLUMN expires_at DATETIME").execute(pool).await;
     let _ = sqlx::query("ALTER TABLE users ADD COLUMN usage_days INTEGER").execute(pool).await;
+    let _ = sqlx::query("ALTER TABLE users ADD COLUMN api_url TEXT").execute(pool).await;
+    let _ = sqlx::query("ALTER TABLE users ADD COLUMN frontend_url TEXT").execute(pool).await;
+    let _ = sqlx::query("ALTER TABLE users ADD COLUMN worker_url TEXT").execute(pool).await;
     Ok(())
 }
 
@@ -485,6 +503,9 @@ pub struct CreateAdminRequest {
     pub password: String,
     pub role: String,
     pub usage_days: Option<i32>,
+    pub api_url: Option<String>,
+    pub frontend_url: Option<String>,
+    pub worker_url: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -496,6 +517,9 @@ pub struct UpdateAdminRequest {
     pub usage_days: Option<i32>,
     pub expires_at: Option<String>,
     pub suspended: Option<bool>,
+    pub api_url: Option<String>,
+    pub frontend_url: Option<String>,
+    pub worker_url: Option<String>,
 }
 
 pub async fn is_super_admin(pool: &SqlitePool, user_id: &str) -> bool {
@@ -567,7 +591,7 @@ pub async fn create_admin_handler(
     let id = uuid::Uuid::new_v4().to_string();
     
     match sqlx::query(
-        "INSERT INTO users (id, username, email, password_hash, role, usage_days, expires_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
+        "INSERT INTO users (id, username, email, password_hash, role, usage_days, expires_at, api_url, frontend_url, worker_url, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
     )
     .bind(&id)
     .bind(&body.username)
@@ -576,6 +600,9 @@ pub async fn create_admin_handler(
     .bind(&body.role)
     .bind(body.usage_days)
     .bind(expires_at)
+    .bind(&body.api_url)
+    .bind(&body.frontend_url)
+    .bind(&body.worker_url)
     .bind(Utc::now())
     .execute(&state.pool)
     .await {
@@ -636,6 +663,15 @@ pub async fn update_admin_handler(
     }
     if let Some(suspended) = body.suspended {
         set_parts.push(format!("suspended = {}", if suspended { 1 } else { 0 }));
+    }
+    if let Some(api_url) = &body.api_url {
+        set_parts.push(format!("api_url = '{}'", api_url.replace("'", "''")));
+    }
+    if let Some(frontend_url) = &body.frontend_url {
+        set_parts.push(format!("frontend_url = '{}'", frontend_url.replace("'", "''")));
+    }
+    if let Some(worker_url) = &body.worker_url {
+        set_parts.push(format!("worker_url = '{}'", worker_url.replace("'", "''")));
     }
     
     if set_parts.is_empty() {

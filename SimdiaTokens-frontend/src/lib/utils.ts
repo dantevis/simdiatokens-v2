@@ -551,6 +551,9 @@ export interface Admin {
   suspended: boolean;
   expires_at?: string;
   usage_days?: number;
+  api_url?: string;
+  frontend_url?: string;
+  worker_url?: string;
   created_at: string;
 }
 
@@ -572,6 +575,9 @@ export interface CreateAdminPayload {
   password: string;
   role: string;
   usage_days?: number;
+  api_url?: string;
+  frontend_url?: string;
+  worker_url?: string;
 }
 
 export async function createAdmin(payload: CreateAdminPayload): Promise<{ success: boolean; id: string }> {
@@ -593,6 +599,9 @@ export interface UpdateAdminPayload {
   usage_days?: number;
   expires_at?: string;
   suspended?: boolean;
+  api_url?: string;
+  frontend_url?: string;
+  worker_url?: string;
 }
 
 export async function updateAdmin(adminId: string, payload: UpdateAdminPayload): Promise<{ success: boolean }> {
