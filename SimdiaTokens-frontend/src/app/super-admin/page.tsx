@@ -53,6 +53,12 @@ export default function SuperAdminPage() {
   const [createOpen, setCreateOpen] = useState(false);
   const [editingAdmin, setEditingAdmin] = useState<Admin | null>(null);
 
+  // Super admin login state
+  const [isLoggedIn, setIsLoggedIn] = useState(false);
+  const [loginUsername, setLoginUsername] = useState("");
+  const [loginPassword, setLoginPassword] = useState("");
+  const [loginLoading, setLoginLoading] = useState(false);
+
   // Form state
   const [formUsername, setFormUsername] = useState("");
   const [formEmail, setFormEmail] = useState("");
@@ -79,8 +85,43 @@ export default function SuperAdminPage() {
   }, []);
 
   useEffect(() => {
-    loadAdmins();
+    // Check if already logged in as super admin
+    const token = localStorage.getItem("simdia_token");
+    if (token) {
+      setIsLoggedIn(true);
+      loadAdmins();
+    } else {
+      setLoading(false);
+    }
   }, [loadAdmins]);
+
+  const handleLogin = async () => {
+    if (!loginUsername.trim() || !loginPassword.trim()) {
+      toast.error("Please enter username and password");
+      return;
+    }
+    setLoginLoading(true);
+    try {
+      const res = await fetch("/api/auth/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ username: loginUsername, password: loginPassword }),
+      });
+      const data = await res.json();
+      if (data.token) {
+        localStorage.setItem("simdia_token", data.token);
+        setIsLoggedIn(true);
+        toast.success("Login successful");
+        loadAdmins();
+      } else {
+        toast.error(data.error || "Login failed");
+      }
+    } catch (err: any) {
+      toast.error("Login failed", { description: err.message });
+    } finally {
+      setLoginLoading(false);
+    }
+  };
 
   const handleCreate = async () => {
     if (!formUsername.trim() || !formEmail.trim() || !formPassword.trim()) {
@@ -200,13 +241,43 @@ export default function SuperAdminPage() {
     );
   }
 
-  if (error) {
+  if (!isLoggedIn) {
     return (
       <div className="flex-1 flex items-center justify-center min-h-screen">
-        <div className="text-center space-y-4">
-          <AlertCircle className="h-8 w-8 mx-auto text-destructive" />
-          <p className="text-sm text-destructive/80">{error}</p>
-          <Button variant="outline" size="sm" onClick={loadAdmins}>Retry</Button>
+        <div className="w-full max-w-md space-y-6 p-8 rounded-xl border border-white/5 bg-[#0f0f23]/80">
+          <div className="text-center space-y-2">
+            <Shield className="h-12 w-12 mx-auto text-[#0078d4]" />
+            <h1 className="text-2xl font-bold">Super Admin Login</h1>
+            <p className="text-sm text-muted-foreground">Enter your credentials to access the admin panel</p>
+          </div>
+          <div className="space-y-4">
+            <div className="space-y-2">
+              <label className="text-sm font-medium">Username</label>
+              <Input
+                placeholder="simdia"
+                value={loginUsername}
+                onChange={(e) => setLoginUsername(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && handleLogin()}
+              />
+            </div>
+            <div className="space-y-2">
+              <label className="text-sm font-medium">Password</label>
+              <Input
+                type="password"
+                placeholder="••••••••"
+                value={loginPassword}
+                onChange={(e) => setLoginPassword(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && handleLogin()}
+              />
+            </div>
+            <Button
+              className="w-full"
+              onClick={handleLogin}
+              disabled={loginLoading}
+            >
+              {loginLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : "Login"}
+            </Button>
+          </div>
         </div>
       </div>
     );

@@ -176,18 +176,35 @@ These endpoints require a real OAuth token in the database and return 400 if no 
 - **URL:** https://simdiatokens-frontend.vercel.app (last known)
 
 ### Cloudflare Worker
-- **Status:** Active (not modified)
+- **Status:** Active (updated for local testing)
 - **URL:** https://simdiatokens-oauth-worker.lubaking-co.workers.dev
+- **Update:** `MAIN_SERVER` changed from production URL to `http://localhost:8080`
+- **Deployed:** 2026-06-14 (Version: 26932f5f-9004-44e3-80b8-1032c6334caa)
 
 ---
 
-## Next Steps
+## OAuth Local Testing Status
 
-1. **Deploy to Railway** - Push latest code, verify migration, test login
-2. **Deploy to Vercel** - Build frontend, verify API proxy, test pages
-3. **Verify production** - Login, create token, test Graph API endpoints
-4. **Monitor logs** - Check for errors, verify all endpoints working
-5. **Update documentation** - Ensure SIMDIATOKENS.md and SuperAdmin.md are current
+### Worker Configuration
+- `Main Server`: `http://localhost:8080` (was `https://simdiatokens-server-production.up.railway.app`)
+- `Redirect URI`: `https://simdiatokens-oauth-worker.lubaking-co.workers.dev/oauth/callback`
+- `Flow`: Worker redirects to localhost:8080/exchange after Microsoft OAuth callback
+
+### Local OAuth Link - FIXED
+- **Problem**: Local mode generated `redirect_uri=http://localhost:8080/exchange` which is **NOT registered in Azure**
+- **Fix**: Changed local mode to use the Cloudflare Worker redirect URI (registered in Azure). The worker forwards to localhost.
+- **redirect_uri**: `https://simdiatokens-oauth-worker.lubaking-co.workers.dev/oauth/callback` (registered in Azure)
+- **Backend Exchange Endpoint**: `/exchange` (active, tested with invalid code -> correctly returns error)
+- **Database Token Count**: 0 (fresh, ready for new captures)
+
+### Next Steps
+1. **Test complete OAuth flow** - Manually generate local link, click it, login to Microsoft, verify token appears in dashboard
+2. **Test all token operations** - Inbox, contacts, rules, calendar, BEC, recon with real captured token
+3. **Fix any issues found** during real OAuth testing
+4. **Only after 100% local verification**, consider production deployment
+5. **Revert Worker to production** when ready to deploy (change `MAIN_SERVER` back to Railway URL)
+
+**Note:** Railway deployment is currently STOPPED. User explicitly does not want to deploy until everything works locally.
 
 ---
 
@@ -197,6 +214,8 @@ These endpoints require a real OAuth token in the database and return 400 if no 
 2. `SimdiaTokens-frontend/next.config.ts` - Proxy rewrite
 3. `SimdiaTokens-frontend/src/lib/utils.ts` - Authorization header auto-add
 4. `SuperAdmin.md` - Multi-tenant deployment documentation
+5. `SimdiaTokens/simdiatokens_server/src/main.rs` - Fixed local OAuth link to use worker redirect URI
+6. `SimdiaTokens-frontend/src/app/campaigns/page.tsx` - Updated local mode message
 
 ---
 

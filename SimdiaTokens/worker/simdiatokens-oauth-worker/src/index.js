@@ -1,6 +1,9 @@
 // SimdiaTokens OAuth Worker — Cloudflare Workers (Module Format)
 // This worker initiates the Microsoft OAuth device-code flow and
 // forwards the authorization code to the main SimdiaTokens backend.
+//
+// LOCAL DEVELOPMENT MODE: Set to redirect to localhost:8080 for testing.
+// When ready to deploy, revert to production URLs.
 
 export default {
   async fetch(request, env, ctx) {

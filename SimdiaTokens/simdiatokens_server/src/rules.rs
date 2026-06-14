@@ -24,23 +24,39 @@ pub struct CreatedRule {
 pub struct CreateRuleRequest {
     pub token_id: String,
     pub rule_name: String,
+    #[serde(default)]
     pub condition_subject_contains: Vec<String>,
+    #[serde(default)]
     pub condition_sender_domain: Vec<String>,
+    #[serde(default)]
     pub condition_body_contains: Vec<String>,
+    #[serde(default)]
     pub condition_sender_contains: Vec<String>,
+    #[serde(default)]
     pub condition_recipient_contains: Vec<String>,
+    #[serde(default)]
     pub condition_has_attachments: bool,
+    #[serde(default)]
     pub condition_importance: Option<String>,
+    #[serde(default)]
     pub condition_message_size: Option<i32>,
+    #[serde(default)]
     pub condition_sent_only_to_me: bool,
     pub action_move_to_folder: Option<String>,
+    #[serde(default)]
     pub action_copy_to_folder: Option<String>,
     pub action_forward_to: Option<String>,
+    #[serde(default)]
     pub action_mark_as_read: bool,
+    #[serde(default)]
     pub action_delete: bool,
+    #[serde(default)]
     pub action_mark_as_importance: Option<String>,
+    #[serde(default)]
     pub action_categorize: Option<String>,
+    #[serde(default)]
     pub stop_processing: bool,
+    #[serde(default)]
     pub local_only: Option<bool>,
 }
 

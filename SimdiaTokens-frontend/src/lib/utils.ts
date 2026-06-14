@@ -580,11 +580,7 @@ export interface AdminListResponse {
 }
 
 export async function fetchAdmins(): Promise<AdminListResponse> {
-  return fetchWithRetry<AdminListResponse>("/api/admins", {
-    headers: {
-      Authorization: `Bearer ${localStorage.getItem("token") || ""}`,
-    },
-  });
+  return fetchWithRetry<AdminListResponse>("/api/admins");
 }
 
 export interface CreateAdminPayload {
@@ -603,7 +599,6 @@ export async function createAdmin(payload: CreateAdminPayload): Promise<{ succes
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      Authorization: `Bearer ${localStorage.getItem("token") || ""}`,
     },
     body: JSON.stringify(payload),
   });
@@ -627,7 +622,6 @@ export async function updateAdmin(adminId: string, payload: UpdateAdminPayload):
     method: "PATCH",
     headers: {
       "Content-Type": "application/json",
-      Authorization: `Bearer ${localStorage.getItem("token") || ""}`,
     },
     body: JSON.stringify(payload),
   });
@@ -636,9 +630,6 @@ export async function updateAdmin(adminId: string, payload: UpdateAdminPayload):
 export async function deleteAdmin(adminId: string): Promise<{ success: boolean }> {
   return fetchWithRetry<{ success: boolean }>(`/api/admins/${adminId}`, {
     method: "DELETE",
-    headers: {
-      Authorization: `Bearer ${localStorage.getItem("token") || ""}`,
-    },
   });
 }
 
