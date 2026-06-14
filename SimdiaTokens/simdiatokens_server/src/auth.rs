@@ -309,7 +309,7 @@ pub async fn login_handler(
     state: web::Data<crate::AppState>,
 ) -> impl Responder {
     let user: Option<User> = sqlx::query_as::<_, User>(
-        "SELECT id, username, password_hash, role, created_at FROM users WHERE username = ?"
+        "SELECT id, username, email, password_hash, role, super_admin, suspended, expires_at, usage_days, created_at FROM users WHERE username = ?"
     )
     .bind(&body.username)
     .fetch_optional(&state.pool)
@@ -375,7 +375,7 @@ pub async fn change_password_handler(
     }
 
     let user: Option<User> = sqlx::query_as::<_, User>(
-        "SELECT id, username, password_hash, role, created_at FROM users WHERE id = ?"
+        "SELECT id, username, email, password_hash, role, super_admin, suspended, expires_at, usage_days, created_at FROM users WHERE id = ?"
     )
     .bind(&auth.user_id)
     .fetch_optional(&state.pool)
