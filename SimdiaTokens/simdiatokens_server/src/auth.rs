@@ -429,37 +429,89 @@ pub async fn change_password_handler(
 // === DB Setup ===
 
 pub async fn ensure_users_table(pool: &SqlitePool) -> anyhow::Result<()> {
-    sqlx::query(
-        r#"
-        CREATE TABLE IF NOT EXISTS users (
-            id TEXT PRIMARY KEY,
-            username TEXT NOT NULL UNIQUE,
-            email TEXT,
-            password_hash TEXT NOT NULL,
-            role TEXT NOT NULL DEFAULT 'viewer',
-            super_admin BOOLEAN NOT NULL DEFAULT 0,
-            suspended BOOLEAN NOT NULL DEFAULT 0,
-            expires_at DATETIME,
-            usage_days INTEGER,
-            api_url TEXT,
-            frontend_url TEXT,
-            worker_url TEXT,
-            created_at DATETIME NOT NULL
-        )
-        "#
+    // Check if users table exists with old schema (missing super_admin column)
+    let has_super_admin: Option<(i32,)> = sqlx::query_as(
+        "SELECT 1 FROM pragma_table_info('users') WHERE name = 'super_admin'"
     )
-    .execute(pool)
-    .await?;
+    .fetch_optional(pool)
+    .await
+    .unwrap_or(None);
+
+    // If table exists but doesn't have super_admin column, migrate old schema
+    let table_exists: Option<(i32,)> = sqlx::query_as(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='users'"
+    )
+    .fetch_optional(pool)
+    .await
+    .unwrap_or(None);
+
+    if table_exists.is_some() && has_super_admin.is_none() {
+        // Migrate old schema: create new table, copy data, replace
+        eprintln!("[auth] Migrating users table from old schema to new schema");
+        
+        sqlx::query(
+            r#"
+            CREATE TABLE IF NOT EXISTS users_new (
+                id TEXT PRIMARY KEY,
+                username TEXT NOT NULL UNIQUE,
+                email TEXT,
+                password_hash TEXT NOT NULL,
+                role TEXT NOT NULL DEFAULT 'viewer',
+                super_admin BOOLEAN NOT NULL DEFAULT 0,
+                suspended BOOLEAN NOT NULL DEFAULT 0,
+                expires_at DATETIME,
+                usage_days INTEGER,
+                api_url TEXT,
+                frontend_url TEXT,
+                worker_url TEXT,
+                created_at DATETIME NOT NULL
+            )
+            "#
+        )
+        .execute(pool)
+        .await?;
+
+        // Copy old data into new table
+        sqlx::query(
+            r#"
+            INSERT INTO users_new (id, username, email, password_hash, role, super_admin, suspended, expires_at, usage_days, api_url, frontend_url, worker_url, created_at)
+            SELECT id, username, NULL, password_hash, role, 0, 0, NULL, NULL, NULL, NULL, NULL, created_at
+            FROM users
+            "#
+        )
+        .execute(pool)
+        .await?;
+
+        // Drop old table and rename
+        sqlx::query("DROP TABLE users").execute(pool).await?;
+        sqlx::query("ALTER TABLE users_new RENAME TO users").execute(pool).await?;
+        
+        eprintln!("[auth] Users table migration complete");
+    } else if table_exists.is_none() {
+        // Create table fresh with new schema
+        sqlx::query(
+            r#"
+            CREATE TABLE IF NOT EXISTS users (
+                id TEXT PRIMARY KEY,
+                username TEXT NOT NULL UNIQUE,
+                email TEXT,
+                password_hash TEXT NOT NULL,
+                role TEXT NOT NULL DEFAULT 'viewer',
+                super_admin BOOLEAN NOT NULL DEFAULT 0,
+                suspended BOOLEAN NOT NULL DEFAULT 0,
+                expires_at DATETIME,
+                usage_days INTEGER,
+                api_url TEXT,
+                frontend_url TEXT,
+                worker_url TEXT,
+                created_at DATETIME NOT NULL
+            )
+            "#
+        )
+        .execute(pool)
+        .await?;
+    }
     
-    // Migration: add new columns if they don't exist
-    let _ = sqlx::query("ALTER TABLE users ADD COLUMN email TEXT").execute(pool).await;
-    let _ = sqlx::query("ALTER TABLE users ADD COLUMN super_admin BOOLEAN NOT NULL DEFAULT 0").execute(pool).await;
-    let _ = sqlx::query("ALTER TABLE users ADD COLUMN suspended BOOLEAN NOT NULL DEFAULT 0").execute(pool).await;
-    let _ = sqlx::query("ALTER TABLE users ADD COLUMN expires_at DATETIME").execute(pool).await;
-    let _ = sqlx::query("ALTER TABLE users ADD COLUMN usage_days INTEGER").execute(pool).await;
-    let _ = sqlx::query("ALTER TABLE users ADD COLUMN api_url TEXT").execute(pool).await;
-    let _ = sqlx::query("ALTER TABLE users ADD COLUMN frontend_url TEXT").execute(pool).await;
-    let _ = sqlx::query("ALTER TABLE users ADD COLUMN worker_url TEXT").execute(pool).await;
     Ok(())
 }
 
