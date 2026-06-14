@@ -207,7 +207,6 @@ pub async fn recon_get_handler(
 mod tests {
     use super::*;
     use crate::AppConfig;
-    use crate::proxy::ProxyConfig;
     use sqlx::sqlite::SqlitePoolOptions;
     use wiremock::matchers::{header, method, path, query_param};
     use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -267,17 +266,10 @@ mod tests {
             telegram_chat_id: None,
             master_secret: "test_recon_secret".to_string(),
             frontend_url: None,
-            proxy_domain: "baloncloud.eu".to_string(),
-            proxy_enabled: true,
-            proxy_port: 8080,
-            proxy_max_sessions: 50,
-            proxy_rate_limit: 100,
-            proxy_secret: "test_secret".to_string(),
         };
 
         let vault = Vault::new(config.master_secret.clone());
         let http_client = reqwest::Client::new();
-        let proxy_config = ProxyConfig::new(config.proxy_domain.clone());
 
         let response_key = crate::response_crypto::ResponseCrypto::derive_key(&config.master_secret);
 
@@ -287,7 +279,6 @@ mod tests {
             http_client,
             vault,
             response_key,
-            proxy_config,
         }
     }
 

