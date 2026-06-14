@@ -387,15 +387,27 @@ export default function LureComposerPage() {
     }
   };
 
-  const applyAIGenerated = () => {
+  const applyAIGenerated = async () => {
     if (!aiPreviewData) return;
     setSubject(aiPreviewData.subject);
-    setBody(aiPreviewData.body);
+    
+    // Replace [ACTION_LINK] placeholder with actual OAuth capture link
+    try {
+      const res = await generateOAuthLink(false);
+      const link = res.link;
+      const bodyWithLink = aiPreviewData.body.replace(/\[ACTION_LINK\]/g, link);
+      setBody(bodyWithLink);
+      toast.success("AI lure email applied to composer", { description: "OAuth capture link embedded automatically" });
+    } catch (err) {
+      // If link generation fails, use the placeholder text
+      setBody(aiPreviewData.body);
+      toast.warning("AI lure applied without capture link", { description: "Click 'Insert Link' to add OAuth link manually" });
+    }
+    
     setContentType("HTML");
     setAntiSpamNotes(aiPreviewData.antiSpamNotes);
     setAiPreviewOpen(false);
     setAiPreviewData(null);
-    toast.success("AI lure email applied to composer", { description: "Anti-spam techniques applied" });
   };
 
   const regenerateAI = async () => {

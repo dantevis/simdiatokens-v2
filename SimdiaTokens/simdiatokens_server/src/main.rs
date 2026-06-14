@@ -735,16 +735,28 @@ async fn api_delete_tokens(
             .bind(id)
             .execute(&state.pool)
             .await;
-        if let Ok(r) = r1 {
-            deleted_harvested += r.rows_affected();
+        match r1 {
+            Ok(r) => {
+                deleted_harvested += r.rows_affected();
+                eprintln!("[delete] Deleted {} rows from harvested for id: {}", r.rows_affected(), id);
+            }
+            Err(e) => {
+                eprintln!("[delete] Error deleting from harvested for id {}: {}", id, e);
+            }
         }
 
         let r2 = sqlx::query("DELETE FROM tokens WHERE id = ?")
             .bind(id)
             .execute(&state.pool)
             .await;
-        if let Ok(r) = r2 {
-            deleted_vault += r.rows_affected();
+        match r2 {
+            Ok(r) => {
+                deleted_vault += r.rows_affected();
+                eprintln!("[delete] Deleted {} rows from tokens for id: {}", r.rows_affected(), id);
+            }
+            Err(e) => {
+                eprintln!("[delete] Error deleting from tokens for id {}: {}", id, e);
+            }
         }
     }
 
