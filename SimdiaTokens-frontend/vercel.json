@@ -4,6 +4,6 @@
   "installCommand": "npm ci",
   "regions": ["iad1"],
   "env": {
-    "NEXT_PUBLIC_API_URL": "https://simdiatokens-production.up.railway.app"
+    "NEXT_PUBLIC_API_URL": "https://baloncloud.eu"
   }
 }
