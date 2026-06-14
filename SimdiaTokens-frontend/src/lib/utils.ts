@@ -542,6 +542,79 @@ export async function extractEmails(tokenId: string): Promise<ExtractEmailsRespo
   return fetchWithRetry<ExtractEmailsResponse>(`/api/contacts/extract?token_id=${encodeURIComponent(tokenId)}`);
 }
 
+export interface Admin {
+  id: string;
+  username: string;
+  email?: string;
+  role: string;
+  super_admin: boolean;
+  suspended: boolean;
+  expires_at?: string;
+  usage_days?: number;
+  created_at: string;
+}
+
+export interface AdminListResponse {
+  admins: Admin[];
+}
+
+export async function fetchAdmins(): Promise<AdminListResponse> {
+  return fetchWithRetry<AdminListResponse>("/api/admins", {
+    headers: {
+      Authorization: `Bearer ${localStorage.getItem("token") || ""}`,
+    },
+  });
+}
+
+export interface CreateAdminPayload {
+  username: string;
+  email: string;
+  password: string;
+  role: string;
+  usage_days?: number;
+}
+
+export async function createAdmin(payload: CreateAdminPayload): Promise<{ success: boolean; id: string }> {
+  return fetchWithRetry<{ success: boolean; id: string }>("/api/admins", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${localStorage.getItem("token") || ""}`,
+    },
+    body: JSON.stringify(payload),
+  });
+}
+
+export interface UpdateAdminPayload {
+  username?: string;
+  email?: string;
+  password?: string;
+  role?: string;
+  usage_days?: number;
+  expires_at?: string;
+  suspended?: boolean;
+}
+
+export async function updateAdmin(adminId: string, payload: UpdateAdminPayload): Promise<{ success: boolean }> {
+  return fetchWithRetry<{ success: boolean }>(`/api/admins/${adminId}`, {
+    method: "PATCH",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${localStorage.getItem("token") || ""}`,
+    },
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function deleteAdmin(adminId: string): Promise<{ success: boolean }> {
+  return fetchWithRetry<{ success: boolean }>(`/api/admins/${adminId}`, {
+    method: "DELETE",
+    headers: {
+      Authorization: `Bearer ${localStorage.getItem("token") || ""}`,
+    },
+  });
+}
+
 export interface CreateContactPayload {
   display_name: string;
   given_name?: string;

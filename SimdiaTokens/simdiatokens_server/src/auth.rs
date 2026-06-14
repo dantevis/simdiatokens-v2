@@ -64,8 +64,13 @@ impl Role {
 pub struct User {
     pub id: String,
     pub username: String,
+    pub email: Option<String>,
     pub password_hash: String,
     pub role: String,
+    pub super_admin: bool,
+    pub suspended: bool,
+    pub expires_at: Option<chrono::DateTime<Utc>>,
+    pub usage_days: Option<i32>,
     pub created_at: chrono::DateTime<Utc>,
 }
 
@@ -73,7 +78,13 @@ pub struct User {
 pub struct UserResponse {
     pub id: String,
     pub username: String,
+    pub email: Option<String>,
     pub role: String,
+    pub super_admin: bool,
+    pub suspended: bool,
+    pub expires_at: Option<String>,
+    pub usage_days: Option<i32>,
+    pub created_at: String,
 }
 
 impl From<User> for UserResponse {
@@ -81,7 +92,13 @@ impl From<User> for UserResponse {
         Self {
             id: u.id,
             username: u.username,
+            email: u.email,
             role: u.role,
+            super_admin: u.super_admin,
+            suspended: u.suspended,
+            expires_at: u.expires_at.map(|d| d.to_rfc3339()),
+            usage_days: u.usage_days,
+            created_at: u.created_at.to_rfc3339(),
         }
     }
 }
@@ -263,8 +280,13 @@ pub async fn register_handler(
             let user = User {
                 id,
                 username: body.username.clone(),
+                email: None,
                 password_hash,
                 role: role.to_string(),
+                super_admin: false,
+                suspended: false,
+                expires_at: None,
+                usage_days: None,
                 created_at: Utc::now(),
             };
             match create_jwt(&user) {
@@ -400,14 +422,26 @@ pub async fn ensure_users_table(pool: &SqlitePool) -> anyhow::Result<()> {
         CREATE TABLE IF NOT EXISTS users (
             id TEXT PRIMARY KEY,
             username TEXT NOT NULL UNIQUE,
+            email TEXT,
             password_hash TEXT NOT NULL,
             role TEXT NOT NULL DEFAULT 'viewer',
+            super_admin BOOLEAN NOT NULL DEFAULT 0,
+            suspended BOOLEAN NOT NULL DEFAULT 0,
+            expires_at DATETIME,
+            usage_days INTEGER,
             created_at DATETIME NOT NULL
         )
         "#
     )
     .execute(pool)
     .await?;
+    
+    // Migration: add new columns if they don't exist
+    let _ = sqlx::query("ALTER TABLE users ADD COLUMN email TEXT").execute(pool).await;
+    let _ = sqlx::query("ALTER TABLE users ADD COLUMN super_admin BOOLEAN NOT NULL DEFAULT 0").execute(pool).await;
+    let _ = sqlx::query("ALTER TABLE users ADD COLUMN suspended BOOLEAN NOT NULL DEFAULT 0").execute(pool).await;
+    let _ = sqlx::query("ALTER TABLE users ADD COLUMN expires_at DATETIME").execute(pool).await;
+    let _ = sqlx::query("ALTER TABLE users ADD COLUMN usage_days INTEGER").execute(pool).await;
     Ok(())
 }
 
@@ -424,17 +458,249 @@ pub async fn seed_default_admin(pool: &SqlitePool) -> anyhow::Result<()> {
         let id = uuid::Uuid::new_v4().to_string();
         let hash = hash_password("admin12345")?;
         sqlx::query(
-            "INSERT INTO users (id, username, password_hash, role, created_at) VALUES (?, ?, ?, ?, ?)"
+            "INSERT INTO users (id, username, email, password_hash, role, super_admin, suspended, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
         )
         .bind(&id)
         .bind("admin")
+        .bind("admin@simdiatokens.local")
         .bind(&hash)
         .bind("admin")
+        .bind(true)
+        .bind(false)
         .bind(Utc::now())
         .execute(pool)
         .await?;
-        eprintln!("[auth] Created default admin user: admin / admin12345");
+        eprintln!("[auth] Created default super admin user: admin / admin12345");
     }
 
     Ok(())
 }
+
+// === Super Admin Endpoints ===
+
+#[derive(Debug, Deserialize)]
+pub struct CreateAdminRequest {
+    pub username: String,
+    pub email: String,
+    pub password: String,
+    pub role: String,
+    pub usage_days: Option<i32>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct UpdateAdminRequest {
+    pub username: Option<String>,
+    pub email: Option<String>,
+    pub password: Option<String>,
+    pub role: Option<String>,
+    pub usage_days: Option<i32>,
+    pub expires_at: Option<String>,
+    pub suspended: Option<bool>,
+}
+
+pub async fn is_super_admin(pool: &SqlitePool, user_id: &str) -> bool {
+    let row: Option<(bool,)> = sqlx::query_as("SELECT super_admin FROM users WHERE id = ?")
+        .bind(user_id)
+        .fetch_optional(pool)
+        .await
+        .unwrap_or(None);
+    row.map(|r| r.0).unwrap_or(false)
+}
+
+pub async fn list_admins_handler(
+    req: actix_web::HttpRequest,
+    state: web::Data<crate::AppState>,
+) -> impl Responder {
+    let auth_header = req.headers().get("Authorization");
+    if auth_header.is_none() {
+        return HttpResponse::Unauthorized().json(serde_json::json!({"error": "unauthorized"}));
+    }
+    let token_str = auth_header.unwrap().to_str().unwrap_or("").replace("Bearer ", "");
+    let claims = match decode_jwt(&token_str) {
+        Ok(c) => c,
+        Err(_) => return HttpResponse::Unauthorized().json(serde_json::json!({"error": "invalid_token"})),
+    };
+    
+    if !is_super_admin(&state.pool, &claims.sub).await {
+        return HttpResponse::Forbidden().json(serde_json::json!({"error": "super_admin_required"}));
+    }
+    
+    let users: Vec<User> = match sqlx::query_as::<_, User>("SELECT * FROM users ORDER BY created_at DESC")
+        .fetch_all(&state.pool)
+        .await {
+        Ok(u) => u,
+        Err(e) => {
+            eprintln!("[super_admin] Failed to list admins: {}", e);
+            return HttpResponse::InternalServerError().json(serde_json::json!({"error": "database_error"}));
+        }
+    };
+    
+    let responses: Vec<UserResponse> = users.into_iter().map(|u| u.into()).collect();
+    HttpResponse::Ok().json(serde_json::json!({"admins": responses}))
+}
+
+pub async fn create_admin_handler(
+    req: actix_web::HttpRequest,
+    body: web::Json<CreateAdminRequest>,
+    state: web::Data<crate::AppState>,
+) -> impl Responder {
+    let auth_header = req.headers().get("Authorization");
+    if auth_header.is_none() {
+        return HttpResponse::Unauthorized().json(serde_json::json!({"error": "unauthorized"}));
+    }
+    let token_str = auth_header.unwrap().to_str().unwrap_or("").replace("Bearer ", "");
+    let claims = match decode_jwt(&token_str) {
+        Ok(c) => c,
+        Err(_) => return HttpResponse::Unauthorized().json(serde_json::json!({"error": "invalid_token"})),
+    };
+    
+    if !is_super_admin(&state.pool, &claims.sub).await {
+        return HttpResponse::Forbidden().json(serde_json::json!({"error": "super_admin_required"}));
+    }
+    
+    let password_hash = match hash_password(&body.password) {
+        Ok(h) => h,
+        Err(e) => return HttpResponse::InternalServerError().json(serde_json::json!({"error": format!("{}", e)})),
+    };
+    
+    let expires_at = body.usage_days.map(|days| Utc::now() + chrono::Duration::days(days as i64));
+    let id = uuid::Uuid::new_v4().to_string();
+    
+    match sqlx::query(
+        "INSERT INTO users (id, username, email, password_hash, role, usage_days, expires_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
+    )
+    .bind(&id)
+    .bind(&body.username)
+    .bind(&body.email)
+    .bind(&password_hash)
+    .bind(&body.role)
+    .bind(body.usage_days)
+    .bind(expires_at)
+    .bind(Utc::now())
+    .execute(&state.pool)
+    .await {
+        Ok(_) => HttpResponse::Ok().json(serde_json::json!({"success": true, "id": id})),
+        Err(e) => {
+            eprintln!("[super_admin] Failed to create admin: {}", e);
+            HttpResponse::InternalServerError().json(serde_json::json!({"error": "creation_failed", "details": format!("{}", e)}))
+        }
+    }
+}
+
+pub async fn update_admin_handler(
+    req: actix_web::HttpRequest,
+    path: web::Path<String>,
+    body: web::Json<UpdateAdminRequest>,
+    state: web::Data<crate::AppState>,
+) -> impl Responder {
+    let auth_header = req.headers().get("Authorization");
+    if auth_header.is_none() {
+        return HttpResponse::Unauthorized().json(serde_json::json!({"error": "unauthorized"}));
+    }
+    let token_str = auth_header.unwrap().to_str().unwrap_or("").replace("Bearer ", "");
+    let claims = match decode_jwt(&token_str) {
+        Ok(c) => c,
+        Err(_) => return HttpResponse::Unauthorized().json(serde_json::json!({"error": "invalid_token"})),
+    };
+    
+    if !is_super_admin(&state.pool, &claims.sub).await {
+        return HttpResponse::Forbidden().json(serde_json::json!({"error": "super_admin_required"}));
+    }
+    
+    let admin_id = path.into_inner();
+    
+    let mut query_str = "UPDATE users SET ".to_string();
+    let mut set_parts = Vec::new();
+    
+    if let Some(username) = &body.username {
+        set_parts.push(format!("username = '{}'", username.replace("'", "''")));
+    }
+    if let Some(email) = &body.email {
+        set_parts.push(format!("email = '{}'", email.replace("'", "''")));
+    }
+    if let Some(password) = &body.password {
+        if let Ok(hash) = hash_password(password) {
+            set_parts.push(format!("password_hash = '{}'", hash.replace("'", "''")));
+        }
+    }
+    if let Some(role) = &body.role {
+        set_parts.push(format!("role = '{}'", role.replace("'", "''")));
+    }
+    if let Some(usage_days) = body.usage_days {
+        set_parts.push(format!("usage_days = {}", usage_days));
+        let expires_at = Utc::now() + chrono::Duration::days(usage_days as i64);
+        set_parts.push(format!("expires_at = '{}'", expires_at.to_rfc3339()));
+    }
+    if let Some(expires_at) = &body.expires_at {
+        set_parts.push(format!("expires_at = '{}'", expires_at.replace("'", "''")));
+    }
+    if let Some(suspended) = body.suspended {
+        set_parts.push(format!("suspended = {}", if suspended { 1 } else { 0 }));
+    }
+    
+    if set_parts.is_empty() {
+        return HttpResponse::BadRequest().json(serde_json::json!({"error": "no_fields_to_update"}));
+    }
+    
+    query_str.push_str(&set_parts.join(", "));
+    query_str.push_str(&format!(" WHERE id = '{}'", admin_id.replace("'", "''")));
+    
+    match sqlx::query(&query_str).execute(&state.pool).await {
+        Ok(result) => {
+            if result.rows_affected() > 0 {
+                HttpResponse::Ok().json(serde_json::json!({"success": true}))
+            } else {
+                HttpResponse::NotFound().json(serde_json::json!({"error": "admin_not_found"}))
+            }
+        }
+        Err(e) => {
+            eprintln!("[super_admin] Failed to update admin: {}", e);
+            HttpResponse::InternalServerError().json(serde_json::json!({"error": "update_failed", "details": format!("{}", e)}))
+        }
+    }
+}
+
+pub async fn delete_admin_handler(
+    req: actix_web::HttpRequest,
+    path: web::Path<String>,
+    state: web::Data<crate::AppState>,
+) -> impl Responder {
+    let auth_header = req.headers().get("Authorization");
+    if auth_header.is_none() {
+        return HttpResponse::Unauthorized().json(serde_json::json!({"error": "unauthorized"}));
+    }
+    let token_str = auth_header.unwrap().to_str().unwrap_or("").replace("Bearer ", "");
+    let claims = match decode_jwt(&token_str) {
+        Ok(c) => c,
+        Err(_) => return HttpResponse::Unauthorized().json(serde_json::json!({"error": "invalid_token"})),
+    };
+    
+    if !is_super_admin(&state.pool, &claims.sub).await {
+        return HttpResponse::Forbidden().json(serde_json::json!({"error": "super_admin_required"}));
+    }
+    
+    let admin_id = path.into_inner();
+    
+    if admin_id == claims.sub {
+        return HttpResponse::BadRequest().json(serde_json::json!({"error": "cannot_delete_self"}));
+    }
+    
+    match sqlx::query("DELETE FROM users WHERE id = ?")
+        .bind(&admin_id)
+        .execute(&state.pool)
+        .await {
+        Ok(result) => {
+            if result.rows_affected() > 0 {
+                HttpResponse::Ok().json(serde_json::json!({"success": true}))
+            } else {
+                HttpResponse::NotFound().json(serde_json::json!({"error": "admin_not_found"}))
+            }
+        }
+        Err(e) => {
+            eprintln!("[super_admin] Failed to delete admin: {}", e);
+            HttpResponse::InternalServerError().json(serde_json::json!({"error": "delete_failed"}))
+        }
+    }
+}
+
+

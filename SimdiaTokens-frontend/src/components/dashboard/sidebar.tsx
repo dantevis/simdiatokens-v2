@@ -69,6 +69,7 @@ const allNavSections: NavSection[] = [
 const allBottomItems: NavItem[] = [
   { label: "Settings", href: "/settings", icon: Settings, minRole: "admin" },
   { label: "Activity Log", href: "/activity", icon: Activity, minRole: "admin" },
+  { label: "Super Admin", href: "/super-admin", icon: Shield, minRole: "admin" },
 ];
 
 export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {

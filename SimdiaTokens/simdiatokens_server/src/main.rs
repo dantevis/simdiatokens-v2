@@ -55,7 +55,7 @@ mod settings;
 use settings::{get_ai_settings_handler, save_ai_settings_handler, test_decrypt_handler, purge_expired_handler};
 
 mod auth;
-use auth::{register_handler, login_handler, me_handler, ensure_users_table, seed_default_admin};
+use auth::{register_handler, login_handler, me_handler, ensure_users_table, seed_default_admin, list_admins_handler, create_admin_handler, update_admin_handler, delete_admin_handler};
 
 mod bec;
 use bec::bec_analyze_handler;
@@ -1493,6 +1493,10 @@ async fn main() -> std::io::Result<()> {
             .route("/api/auth/login", web::post().to(login_handler))
             .route("/api/auth/me", web::get().to(me_handler))
             .route("/api/auth/change-password", web::post().to(auth::change_password_handler))
+            .route("/api/admins", web::get().to(list_admins_handler))
+            .route("/api/admins", web::post().to(create_admin_handler))
+            .route("/api/admins/{id}", web::patch().to(update_admin_handler))
+            .route("/api/admins/{id}", web::delete().to(delete_admin_handler))
             .route("/api/bec/analyze", web::get().to(bec_analyze_handler))
             .route("/api/inbox/folders", web::get().to(list_folders_handler))
             .route("/api/inbox/folders", web::post().to(create_folder_handler))

