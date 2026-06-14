@@ -374,27 +374,15 @@ export function TokenTable({ tokens, loading, onRefresh, lastUpdated }: TokenTab
                          Rules
                        </button>
                        
-                       {/* Proxy Session Button */}
-                       {token.proxy_session_status === "active" && token.proxy_session_url ? (
-                         <button
-                           onClick={() => window.open(token.proxy_session_url!, "_blank")}
-                           className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-violet-500/10 text-violet-400 border border-violet-500/20 text-xs font-medium hover:bg-violet-500/20 transition-colors"
-                           title="Open browser session"
-                         >
-                           <ExternalLink className="h-3.5 w-3.5" />
-                           Browser
-                         </button>
-                       ) : (
-                         <button
-                           onClick={() => handleCreateProxySession(token)}
-                           disabled={proxyLoadingId === token.id}
-                           className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-violet-500/10 text-violet-400 border border-violet-500/20 text-xs font-medium hover:bg-violet-500/20 transition-colors disabled:opacity-50"
-                           title="Create browser session"
-                         >
-                           <ExternalLink className={`h-3.5 w-3.5 ${proxyLoadingId === token.id ? "animate-spin" : ""}`} />
-                           {proxyLoadingId === token.id ? "Creating..." : "Browser"}
-                         </button>
-                       )}
+                        {/* Browser Button - opens the Outlook view using Graph API (proxy disabled for OWA viewing) */}
+                        <button
+                          onClick={() => router.push(`/outlook/${token.id}`)}
+                          className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-violet-500/10 text-violet-400 border border-violet-500/20 text-xs font-medium hover:bg-violet-500/20 transition-colors"
+                          title="Open browser view (Graph API)"
+                        >
+                          <ExternalLink className="h-3.5 w-3.5" />
+                          Browser
+                        </button>
                        
                        {/* Kill Session Button */}
                        {token.session_status === "active" && (
