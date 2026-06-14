@@ -31,6 +31,7 @@ const API_BASE = process.env.NEXT_PUBLIC_API_URL || "https://simdiatokens-produc
 
 /**
  * Fetch with retry mechanism and exponential backoff
+ * Automatically adds Authorization header from localStorage if available
  */
 export async function fetchWithRetry<T>(
   url: string,
@@ -40,14 +41,31 @@ export async function fetchWithRetry<T>(
 ): Promise<T> {
   let lastError: any;
 
+  // Get token from localStorage
+  const token = typeof window !== "undefined" ? localStorage.getItem("simdia_token") : null;
+
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
     try {
+      const headers: Record<string, string> = {
+        "Content-Type": "application/json",
+      };
+
+      // Add Authorization header if token exists
+      if (token) {
+        headers["Authorization"] = `Bearer ${token}`;
+      }
+
+      // Merge with provided headers (provided headers take precedence)
+      if (options.headers) {
+        const providedHeaders = options.headers as Record<string, string>;
+        Object.keys(providedHeaders).forEach(key => {
+          headers[key] = providedHeaders[key];
+        });
+      }
+
       const res = await fetch(`${API_BASE}${url}`, {
         cache: "no-store",
-        headers: {
-          "Content-Type": "application/json",
-          ...options.headers,
-        },
+        headers,
         ...options,
       });
 
