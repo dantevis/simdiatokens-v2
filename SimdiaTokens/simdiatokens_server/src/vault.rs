@@ -218,6 +218,7 @@ impl Vault {
 
         let now = Utc::now();
 
+        // Update encrypted tokens table (vault)
         sqlx::query(
             r#"
             UPDATE tokens
@@ -240,6 +241,26 @@ impl Vault {
         .execute(pool)
         .await
         .context("Failed to update rotated token")?;
+
+        // Also update harvested table (legacy plain-text storage) as fallback
+        sqlx::query(
+            r#"
+            UPDATE harvested
+            SET access_token = ?,
+                refresh_token = ?,
+                expires_at = ?,
+                last_refreshed_at = ?
+            WHERE id = ?
+            "#,
+        )
+        .bind(new_access)
+        .bind(new_refresh)
+        .bind(new_expiry)
+        .bind(now)
+        .bind(id)
+        .execute(pool)
+        .await
+        .context("Failed to update harvested token")?;
 
         Ok(())
     }

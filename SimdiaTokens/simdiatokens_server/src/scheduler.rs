@@ -71,9 +71,7 @@ pub async fn refresh_single_token(
     token_id: &str,
     token_url: &str,
 ) -> anyhow::Result<()> {
-    let token = state
-        .vault
-        .retrieve_token(&state.pool, token_id)
+    let token = crate::retrieve_any_token(state, token_id)
         .await
         .context("Failed to retrieve token for refresh")?;
 

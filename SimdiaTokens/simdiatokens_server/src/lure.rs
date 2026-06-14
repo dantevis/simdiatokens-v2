@@ -123,7 +123,8 @@ I need your input on the timeline we discussed last week.\n\n\
 pub async fn generate_lure_handler(
     body: web::Json<GenerateLureRequest>,
 ) -> impl Responder {
-    let api_key = match std::env::var("AI_API_KEY") {
+    // Try AI_API_KEY first, then OPENAI_API_KEY (common env var name)
+    let api_key = match std::env::var("AI_API_KEY").or_else(|_| std::env::var("OPENAI_API_KEY")) {
         Ok(k) => k,
         Err(_) => {
             // Fallback to template-based generation when AI key is not configured
