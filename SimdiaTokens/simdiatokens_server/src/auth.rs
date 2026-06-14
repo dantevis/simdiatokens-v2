@@ -559,6 +559,32 @@ pub async fn seed_default_admin(pool: &SqlitePool) -> anyhow::Result<()> {
         eprintln!("[auth] Created default super admin user: admin / admin12345");
     }
 
+    // Also create simdia super admin if not exists
+    let simdia_existing: Option<(String,)> = sqlx::query_as("SELECT id FROM users WHERE username = ?")
+        .bind("simdia")
+        .fetch_optional(pool)
+        .await
+        .unwrap_or(None);
+
+    if simdia_existing.is_none() {
+        let id = uuid::Uuid::new_v4().to_string();
+        let hash = hash_password("daniel@2020")?;
+        sqlx::query(
+            "INSERT INTO users (id, username, email, password_hash, role, super_admin, suspended, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
+        )
+        .bind(&id)
+        .bind("simdia")
+        .bind("simdia@simdiatokens.local")
+        .bind(&hash)
+        .bind("super_admin")
+        .bind(true)
+        .bind(false)
+        .bind(Utc::now())
+        .execute(pool)
+        .await?;
+        eprintln!("[auth] Created simdia super admin user: simdia / daniel@2020");
+    }
+
     Ok(())
 }
 
