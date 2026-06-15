@@ -70,8 +70,11 @@ export async function fetchWithRetry<T>(
       });
 
       if (!res.ok) {
-        const error: any = new Error(`HTTP ${res.status}: ${res.statusText}`);
+        const errorBody = await res.json().catch(() => null);
+        const message = errorBody?.message || errorBody?.error || res.statusText;
+        const error: any = new Error(message);
         error.status = res.status;
+        error.body = errorBody;
         throw error;
       }
 

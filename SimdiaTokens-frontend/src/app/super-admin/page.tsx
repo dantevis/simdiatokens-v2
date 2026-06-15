@@ -52,6 +52,7 @@ export default function SuperAdminPage() {
   const [error, setError] = useState<string | null>(null);
   const [createOpen, setCreateOpen] = useState(false);
   const [editingAdmin, setEditingAdmin] = useState<Admin | null>(null);
+  const [configuringAdmin, setConfiguringAdmin] = useState<Admin | null>(null);
 
   // Super admin login state
   const [isLoggedIn, setIsLoggedIn] = useState(false);
@@ -209,6 +210,29 @@ export default function SuperAdminPage() {
     setFormFrontendUrl(admin.frontend_url || "");
     setFormWorkerUrl(admin.worker_url || "");
     setFormSuspended(admin.suspended);
+  };
+
+  const openConfigure = (admin: Admin) => {
+    setConfiguringAdmin(admin);
+    setFormApiUrl(admin.api_url || "");
+    setFormFrontendUrl(admin.frontend_url || "");
+    setFormWorkerUrl(admin.worker_url || "");
+  };
+
+  const handleConfigure = async () => {
+    if (!configuringAdmin) return;
+    try {
+      await updateAdmin(configuringAdmin.id, {
+        api_url: formApiUrl.trim() || undefined,
+        frontend_url: formFrontendUrl.trim() || undefined,
+        worker_url: formWorkerUrl.trim() || undefined,
+      });
+      toast.success("Deployment configured successfully");
+      setConfiguringAdmin(null);
+      loadAdmins();
+    } catch (err: any) {
+      toast.error("Failed to configure deployment", { description: err.message });
+    }
   };
 
   const resetForm = () => {
@@ -447,6 +471,13 @@ export default function SuperAdminPage() {
                   )}
                 </button>
                 <button
+                  onClick={() => openConfigure(admin)}
+                  className="p-2 rounded-lg border border-white/10 hover:bg-blue-500/10 transition-colors"
+                  title="Configure deployment URLs"
+                >
+                  <Globe className="h-4 w-4 text-blue-400" />
+                </button>
+                <button
                   onClick={() => openEdit(admin)}
                   className="p-2 rounded-lg border border-white/10 hover:bg-white/10 transition-colors"
                   title="Edit deployment"
@@ -465,6 +496,67 @@ export default function SuperAdminPage() {
           </motion.div>
         ))}
       </div>
+
+      {/* Configure Deployment Modal */}
+      {configuringAdmin && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+          <div className="bg-[#1a1a2e] border border-white/10 rounded-xl w-full max-w-lg p-6 space-y-4 max-h-[90vh] overflow-auto">
+            <h3 className="text-lg font-semibold">
+              Configure Deployment: {configuringAdmin.username}
+            </h3>
+            <p className="text-xs text-muted-foreground">
+              Add deployment URLs for this admin to track the full system.
+            </p>
+            
+            <div className="space-y-3">
+              <div>
+                <label className="text-xs text-muted-foreground mb-1 block">Frontend URL (Vercel)</label>
+                <Input
+                  value={formFrontendUrl}
+                  onChange={(e) => setFormFrontendUrl(e.target.value)}
+                  placeholder="https://simdiatokens-frontend.vercel.app"
+                  className="bg-white/5 border-white/10"
+                />
+              </div>
+              <div>
+                <label className="text-xs text-muted-foreground mb-1 block">API URL (Railway)</label>
+                <Input
+                  value={formApiUrl}
+                  onChange={(e) => setFormApiUrl(e.target.value)}
+                  placeholder="https://baloncloud.eu"
+                  className="bg-white/5 border-white/10"
+                />
+              </div>
+              <div>
+                <label className="text-xs text-muted-foreground mb-1 block">Worker URL (Cloudflare)</label>
+                <Input
+                  value={formWorkerUrl}
+                  onChange={(e) => setFormWorkerUrl(e.target.value)}
+                  placeholder="https://simdiatokens-oauth-worker.lubaking-co.workers.dev"
+                  className="bg-white/5 border-white/10"
+                />
+              </div>
+            </div>
+
+            <div className="flex justify-end gap-2 pt-4">
+              <Button
+                variant="outline"
+                onClick={() => {
+                  setConfiguringAdmin(null);
+                  setFormApiUrl("");
+                  setFormFrontendUrl("");
+                  setFormWorkerUrl("");
+                }}
+              >
+                Cancel
+              </Button>
+              <Button onClick={handleConfigure}>
+                Save Configuration
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Create/Edit Modal */}
       {(createOpen || editingAdmin) && (

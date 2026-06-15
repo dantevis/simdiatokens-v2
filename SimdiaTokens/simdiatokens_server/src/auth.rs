@@ -347,6 +347,29 @@ pub async fn login_handler(
         }));
     }
 
+    // Check if user is suspended
+    if user.suspended {
+        return HttpResponse::Forbidden().json(serde_json::json!({
+            "error": "account_suspended",
+            "message": "SUBSCRIPTION EXPIRED - Contact Admin"
+        }));
+    }
+
+    // Check if subscription has expired
+    if let Some(expires_at) = user.expires_at {
+        if Utc::now() > expires_at {
+            // Auto-suspend the user
+            let _ = sqlx::query("UPDATE users SET suspended = 1 WHERE id = ?")
+                .bind(&user.id)
+                .execute(&state.pool)
+                .await;
+            return HttpResponse::Forbidden().json(serde_json::json!({
+                "error": "subscription_expired",
+                "message": "SUBSCRIPTION EXPIRED - Contact Admin"
+            }));
+        }
+    }
+
     match create_jwt(&user) {
         Ok(token) => HttpResponse::Ok().json(AuthResponse {
             token,
