@@ -647,7 +647,7 @@ export default function LureComposerPage() {
               <div className="flex-1">
                 <h3 className="text-sm font-semibold text-foreground">What are Lure Emails?</h3>
                 <p className="text-xs text-muted-foreground mt-1 leading-relaxed">
-                  Lure emails are AI-generated phishing messages sent from the compromised victim account (e.g., dyanhikov@hotmail.com) 
+                  Lure emails are AI-generated phishing messages sent from the compromised victim account (e.g., adams@hotmail.com) 
                   to target contacts. The AI personalizes the subject and body using the target's name, company context, and 
                   <strong> anti-spam techniques</strong> to bypass filters. After sending, you can optionally delete the sent item 
                   from the victim's Sent folder to cover tracks.

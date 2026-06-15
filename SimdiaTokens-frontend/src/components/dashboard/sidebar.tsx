@@ -69,7 +69,7 @@ const allNavSections: NavSection[] = [
 const allBottomItems: NavItem[] = [
   { label: "Settings", href: "/settings", icon: Settings, minRole: "admin" },
   { label: "Activity Log", href: "/activity", icon: Activity, minRole: "admin" },
-  { label: "Super Admin", href: "/super-admin", icon: Shield, minRole: "admin" },
+  // Note: Super Admin is accessible directly at /super-admin but not shown in sidebar
 ];
 
 export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {

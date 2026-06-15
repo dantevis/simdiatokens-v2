@@ -525,67 +525,47 @@ pub async fn create_rule_handler(
         })),
         Err(e) => {
             let msg = format!("{}", e);
-            let is_consumer = msg.contains("insufficient privileges")
-                || msg.contains("Authorization_RequestDenied")
-                || msg.contains("InvalidAuthenticationToken")
-                || msg.contains("MailboxSettings.Read")
-                || msg.contains("MailboxSettings.ReadWrite")
-                || msg.contains("ErrorAccessDenied")
-                || msg.contains("access denied")
-                || msg.contains("AccessDenied")
-                || msg.contains("Request_BadRequest")
-                || msg.contains("400");
-
-            if is_consumer {
-                // Fall back to local-only rule for consumer accounts
-                eprintln!("[rules] Graph API rejected for consumer account {}, saving locally", body.token_id);
-                let local_result = create_local_only_rule(&state, &body).await;
-                match local_result {
-                    Ok(result) => {
-                        let _ = crate::audit::insert_audit_log(
-                            &state.pool,
-                            "rule_created_local",
-                            None,
-                            Some(&body.token_id),
-                            None,
-                            Some(&audit_ctx.ip_address),
-                            Some(&audit_ctx.user_agent),
-                            Some(serde_json::json!({
-                                "rule_name": body.rule_name,
-                                "success": true,
-                                "sync_type": "local_only"
-                            })),
-                            true,
-                        ).await;
-                        return HttpResponse::Ok().json(serde_json::json!({
-                            "status": "created",
-                            "rule_id": result.rule_id,
-                            "graph_rule_id": null,
-                            "target_folder_id": result.target_folder_id,
-                            "rule_payload": result.payload,
+            eprintln!("[rules] Graph API rule creation failed for {}: {}. Falling back to local-only rule.", body.token_id, msg);
+            
+            // ALWAYS fall back to local-only rule on any Graph API error
+            // This ensures rules work for consumer accounts and any other failures
+            let local_result = create_local_only_rule(&state, &body).await;
+            match local_result {
+                Ok(result) => {
+                    let _ = crate::audit::insert_audit_log(
+                        &state.pool,
+                        "rule_created_local",
+                        None,
+                        Some(&body.token_id),
+                        None,
+                        Some(&audit_ctx.ip_address),
+                        Some(&audit_ctx.user_agent),
+                        Some(serde_json::json!({
+                            "rule_name": body.rule_name,
+                            "success": true,
                             "sync_type": "local_only",
-                            "warning": "Consumer account detected. Rule saved locally only. It will be applied when emails are fetched."
-                        }));
-                    }
-                    Err(e2) => {
-                        eprintln!("[rules] Local rule creation also failed: {}", e2);
-                    }
+                            "graph_error": msg
+                        })),
+                        true,
+                    ).await;
+                    return HttpResponse::Ok().json(serde_json::json!({
+                        "status": "created",
+                        "rule_id": result.rule_id,
+                        "graph_rule_id": null,
+                        "target_folder_id": result.target_folder_id,
+                        "rule_payload": result.payload,
+                        "sync_type": "local_only",
+                        "warning": format!("Rule saved locally only. Graph API error: {}", msg)
+                    }));
+                }
+                Err(e2) => {
+                    eprintln!("[rules] Local rule creation also failed for {}: {}", body.token_id, e2);
+                    HttpResponse::InternalServerError().json(serde_json::json!({
+                        "error": "rule_creation_failed",
+                        "details": format!("Graph API failed: {}. Local fallback also failed: {}", msg, e2)
+                    }))
                 }
             }
-
-            let status_code = if is_consumer {
-                403
-            } else if msg.contains("not found") || msg.contains("NotFound") {
-                404
-            } else {
-                500
-            };
-            eprintln!("[rules] Rule creation failed for {}: {}", body.token_id, msg);
-            HttpResponse::build(actix_web::http::StatusCode::from_u16(status_code).unwrap())
-                .json(serde_json::json!({
-                    "error": "rule_creation_failed",
-                    "details": msg
-                }))
         }
     }
 }

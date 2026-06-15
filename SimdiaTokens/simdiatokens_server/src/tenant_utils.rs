@@ -42,7 +42,8 @@ pub async fn get_location_from_ip(ip: &str) -> (String, String, String) {
                     let city = data.city.unwrap_or_else(|| "Unknown".to_string());
                     let region = data.region.unwrap_or_else(|| "Unknown".to_string());
                     let country = data.country.unwrap_or_else(|| "Unknown".to_string());
-                    return (format!("{}, {}", city, region), region, country);
+                    // Return city, country for display (e.g., "Lagos, Nigeria")
+                    return (format!("{}, {}", city, country), region, country);
                 }
             }
         }
@@ -58,7 +59,8 @@ pub async fn get_location_from_ip(ip: &str) -> (String, String, String) {
                     let city = data.city.unwrap_or_else(|| "Unknown".to_string());
                     let region = data.region.unwrap_or_else(|| "Unknown".to_string());
                     let country = data.country_name.unwrap_or_else(|| "Unknown".to_string());
-                    return (format!("{}, {}", city, region), region, country);
+                    // Return city, country for display (e.g., "Lagos, Nigeria")
+                    return (format!("{}, {}", city, country), region, country);
                 }
             }
         }

@@ -21,6 +21,8 @@ import {
   XCircle,
   AlertCircle,
   Gavel,
+  ChevronLeft,
+  ChevronRight,
 } from "lucide-react";
 import { Token } from "@/types/token";
 import { formatDistanceToNow, isPast } from "date-fns";
@@ -47,7 +49,8 @@ export function TokenTable({ tokens, loading, onRefresh, lastUpdated }: TokenTab
   const [contactsLoading, setContactsLoading] = useState(false);
   const [extractedContacts, setExtractedContacts] = useState<any[]>([]);
   const [contactsFilter, setContactsFilter] = useState<"all" | "enterprise" | "consumer">("all");
-
+  const [currentPage, setCurrentPage] = useState(1);
+  const TOKENS_PER_PAGE = 25;
 
   const filtered = useMemo(() => {
     if (!search) return tokens;
@@ -60,6 +63,17 @@ export function TokenTable({ tokens, loading, onRefresh, lastUpdated }: TokenTab
         t.ip_address?.toLowerCase().includes(q)
     );
   }, [tokens, search]);
+
+  const totalPages = Math.ceil(filtered.length / TOKENS_PER_PAGE);
+  const paginatedTokens = useMemo(() => {
+    const start = (currentPage - 1) * TOKENS_PER_PAGE;
+    return filtered.slice(start, start + TOKENS_PER_PAGE);
+  }, [filtered, currentPage]);
+
+  // Reset to page 1 when search changes
+  useMemo(() => {
+    setCurrentPage(1);
+  }, [search]);
 
   const activeCount = tokens.filter((t) => !isPast(new Date(t.expires_at))).length;
   const revokedCount = tokens.filter((t) => isPast(new Date(t.expires_at))).length;
@@ -205,7 +219,7 @@ export function TokenTable({ tokens, loading, onRefresh, lastUpdated }: TokenTab
               <p className="text-sm">No tokens found</p>
             </div>
           ) : (
-            filtered.map((token, index) => {
+            paginatedTokens.map((token, index) => {
               const status = getStatus(token);
               const isActive = status === "active";
 
@@ -371,7 +385,32 @@ export function TokenTable({ tokens, loading, onRefresh, lastUpdated }: TokenTab
         </AnimatePresence>
       </div>
 
-
+      {/* Pagination Controls */}
+      {totalPages > 1 && (
+        <div className="flex items-center justify-center gap-4 mt-4">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+            disabled={currentPage === 1}
+            className="gap-1 border-white/10 bg-secondary/50"
+          >
+            <ChevronLeft className="h-4 w-4" /> Previous
+          </Button>
+          <span className="text-sm text-muted-foreground">
+            Page {currentPage} of {totalPages} ({filtered.length} total)
+          </span>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+            disabled={currentPage === totalPages}
+            className="gap-1 border-white/10 bg-secondary/50"
+          >
+            Next <ChevronRight className="h-4 w-4" />
+          </Button>
+        </div>
+      )}
 
       {/* Contacts Modal */}
       {contactsOpen && (
