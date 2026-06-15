@@ -18,6 +18,7 @@ export default function LoginPage() {
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  const [loginError, setLoginError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!isLoading && isAuthenticated) {
@@ -27,6 +28,7 @@ export default function LoginPage() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    setLoginError(null);
     if (!username.trim() || !password.trim()) {
       toast.error("Enter username and password");
       return;
@@ -42,7 +44,13 @@ export default function LoginPage() {
       }
       router.replace("/");
     } catch (err: any) {
-      toast.error(err.message || "Authentication failed");
+      const message = err.message || "Authentication failed";
+      // Show subscription expired message prominently
+      if (message.includes("SUBSCRIPTION EXPIRED") || message.includes("account_suspended") || message.includes("subscription_expired")) {
+        setLoginError("SUBSCRIPTION EXPIRED - Contact Admin");
+      } else {
+        toast.error(message);
+      }
     } finally {
       setSubmitting(false);
     }
@@ -68,6 +76,17 @@ export default function LoginPage() {
         </div>
 
         {/* Form */}
+        {/* Subscription Expired Banner */}
+        {loginError && (
+          <motion.div
+            initial={{ opacity: 0, y: -10 }}
+            animate={{ opacity: 1, y: 0 }}
+            className="rounded-lg border border-rose-500/30 bg-rose-500/10 p-4 text-center"
+          >
+            <p className="text-rose-400 font-semibold text-sm">{loginError}</p>
+          </motion.div>
+        )}
+
         <form onSubmit={handleSubmit} className="space-y-4" autoComplete="off">
           <div>
             <label className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">

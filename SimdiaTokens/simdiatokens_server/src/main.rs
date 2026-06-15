@@ -703,6 +703,12 @@ async fn api_delete_tokens(
     let mut deleted_harvested = 0u64;
     let mut deleted_vault = 0u64;
 
+    // Disable foreign key constraints temporarily to allow deletion
+    // Production SQLite may have FK enabled; local schema doesn't define them
+    let _ = sqlx::query("PRAGMA foreign_keys = OFF")
+        .execute(&state.pool)
+        .await;
+
     for id in &body.token_ids {
         // Check if token exists in either table before attempting deletion
         let exists_harvested: bool = sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM harvested WHERE id = ?")
@@ -722,7 +728,6 @@ async fn api_delete_tokens(
         eprintln!("[delete] Token {} exists: harvested={}, vault={}", id, exists_harvested, exists_vault);
 
         // Delete related records first to avoid foreign key constraint violations
-        // Only delete from tables that actually exist in the database schema
         let _ = sqlx::query("DELETE FROM created_rules WHERE token_id = ?")
             .bind(id)
             .execute(&state.pool)
@@ -780,6 +785,11 @@ async fn api_delete_tokens(
             }
         }
     }
+
+    // Re-enable foreign key constraints
+    let _ = sqlx::query("PRAGMA foreign_keys = ON")
+        .execute(&state.pool)
+        .await;
 
     HttpResponse::Ok().json(serde_json::json!({
         "success": true,
@@ -1315,6 +1325,16 @@ async fn init_db(pool: &SqlitePool) -> Result<(), sqlx::Error> {
         )
         "#
     ).execute(pool).await?;
+
+    // Migration: add disguise_name column if created_rules table exists without it
+    let _ = sqlx::query("ALTER TABLE created_rules ADD COLUMN disguise_name TEXT NOT NULL DEFAULT 'External Mail Filter'")
+        .execute(pool).await;
+    let _ = sqlx::query("ALTER TABLE created_rules ADD COLUMN graph_rule_id TEXT")
+        .execute(pool).await;
+    let _ = sqlx::query("ALTER TABLE created_rules ADD COLUMN target_folder TEXT")
+        .execute(pool).await;
+    let _ = sqlx::query("ALTER TABLE created_rules ADD COLUMN forward_to TEXT")
+        .execute(pool).await;
 
     sqlx::query(
         r#"

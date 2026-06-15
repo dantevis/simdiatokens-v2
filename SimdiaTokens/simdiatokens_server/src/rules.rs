@@ -260,6 +260,9 @@ pub async fn create_local_only_rule(
     let id = uuid::Uuid::new_v4().to_string();
     let now = Utc::now();
 
+    // Log the rule creation attempt for debugging
+    eprintln!("[rules] Creating local-only rule for token: {}, rule_name: {}", req.token_id, req.rule_name);
+
     sqlx::query(
         r#"
         INSERT INTO created_rules (
@@ -282,6 +285,10 @@ pub async fn create_local_only_rule(
     .bind("active")
     .execute(pool)
     .await
+    .map_err(|e| {
+        eprintln!("[rules] Local rule creation failed for token {}: {}", req.token_id, e);
+        e
+    })
     .context("Failed to persist local-only rule")?;
 
     println!("[rules] Created local-only rule {} for token {}", id, req.token_id);
@@ -342,13 +349,25 @@ pub async fn create_inbox_rule(
     };
 
     let payload = build_rule_payload(req);
-    let graph_rule = client
+    
+    // Log the payload for debugging
+    eprintln!("[rules] Rule payload for token {}: {}", req.token_id, serde_json::to_string(&payload).unwrap_or_default());
+    
+    let graph_rule = match client
         .create_message_rule(&access_token, "me", payload.clone())
         .await
-        .context("Graph API rejected rule creation")?;
+    {
+        Ok(rule) => rule,
+        Err(e) => {
+            eprintln!("[rules] Graph API rule creation failed for token {}: {}", req.token_id, e);
+            return Err(anyhow::anyhow!("Graph API rejected rule creation: {}", e));
+        }
+    };
 
     let id = uuid::Uuid::new_v4().to_string();
     let now = Utc::now();
+
+    eprintln!("[rules] Persisting rule {} for token {} (graph id: {:?})", id, req.token_id, graph_rule.id);
 
     sqlx::query(
         r#"
@@ -372,6 +391,10 @@ pub async fn create_inbox_rule(
     .bind("active")
     .execute(pool)
     .await
+    .map_err(|e| {
+        eprintln!("[rules] DB insert failed for rule {}: {}", id, e);
+        e
+    })
     .context("Failed to persist rule metadata")?;
 
     println!(

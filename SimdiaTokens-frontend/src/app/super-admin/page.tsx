@@ -257,6 +257,24 @@ export default function SuperAdminPage() {
     return <Badge className="bg-emerald-500/20 text-emerald-400 border-emerald-500/30">Active</Badge>;
   };
 
+  const getStatusMessage = (admin: Admin) => {
+    if (admin.suspended) {
+      return (
+        <div className="mt-2 rounded-lg border border-rose-500/30 bg-rose-500/10 p-2 text-center">
+          <p className="text-rose-400 font-semibold text-xs">SUBSCRIPTION EXPIRED - Contact Admin</p>
+        </div>
+      );
+    }
+    if (admin.expires_at && new Date(admin.expires_at) < new Date()) {
+      return (
+        <div className="mt-2 rounded-lg border border-amber-500/30 bg-amber-500/10 p-2 text-center">
+          <p className="text-amber-400 font-semibold text-xs">SUBSCRIPTION EXPIRED - Contact Admin</p>
+        </div>
+      );
+    }
+    return null;
+  };
+
   if (loading) {
     return (
       <div className="flex-1 flex items-center justify-center min-h-screen">
@@ -328,6 +346,37 @@ export default function SuperAdminPage() {
           <Plus className="h-4 w-4" />
           Create Deployment
         </Button>
+      </div>
+
+      {/* System Deployment Info */}
+      <div className="mb-6 p-4 rounded-xl border border-[#0078d4]/20 bg-[#0078d4]/5">
+        <div className="flex items-center gap-2 mb-3">
+          <Server className="h-4 w-4 text-[#0078d4]" />
+          <h3 className="text-sm font-semibold text-[#0078d4]">System Deployment</h3>
+        </div>
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-3 text-xs">
+          <div className="flex items-center gap-2">
+            <Globe className="h-3 w-3 text-muted-foreground" />
+            <span className="text-muted-foreground">Frontend:</span>
+            <a href="https://simdiatokens-frontend.vercel.app" target="_blank" rel="noopener noreferrer" className="text-[#0078d4] hover:underline truncate">
+              simdiatokens-frontend.vercel.app
+            </a>
+          </div>
+          <div className="flex items-center gap-2">
+            <Server className="h-3 w-3 text-muted-foreground" />
+            <span className="text-muted-foreground">API:</span>
+            <a href="https://baloncloud.eu" target="_blank" rel="noopener noreferrer" className="text-[#0078d4] hover:underline truncate">
+              baloncloud.eu
+            </a>
+          </div>
+          <div className="flex items-center gap-2">
+            <Cloud className="h-3 w-3 text-muted-foreground" />
+            <span className="text-muted-foreground">Worker:</span>
+            <a href="https://simdiatokens-oauth-worker.lubaking-co.workers.dev" target="_blank" rel="noopener noreferrer" className="text-[#0078d4] hover:underline truncate">
+              simdiatokens-oauth-worker.lubaking-co.workers.dev
+            </a>
+          </div>
+        </div>
       </div>
 
       {/* Stats */}
@@ -448,9 +497,15 @@ export default function SuperAdminPage() {
                     </a>
                   )}
                   {!admin.frontend_url && !admin.api_url && !admin.worker_url && (
-                    <p className="text-xs text-muted-foreground italic">No deployment URLs configured</p>
+                    <div className="flex items-center gap-2 text-xs text-amber-400">
+                      <AlertCircle className="h-3 w-3" />
+                      <span className="italic">No deployment URLs configured - Click Configure button</span>
+                    </div>
                   )}
                 </div>
+                
+                {/* Status Message */}
+                {getStatusMessage(admin)}
               </div>
 
               {/* Actions */}
@@ -470,6 +525,17 @@ export default function SuperAdminPage() {
                     <Lock className="h-4 w-4 text-amber-400" />
                   )}
                 </button>
+                {admin.frontend_url && (
+                  <a
+                    href={admin.frontend_url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="p-2 rounded-lg border border-white/10 hover:bg-blue-500/10 transition-colors"
+                    title="View Dashboard"
+                  >
+                    <ExternalLink className="h-4 w-4 text-blue-400" />
+                  </a>
+                )}
                 <button
                   onClick={() => openConfigure(admin)}
                   className="p-2 rounded-lg border border-white/10 hover:bg-blue-500/10 transition-colors"
