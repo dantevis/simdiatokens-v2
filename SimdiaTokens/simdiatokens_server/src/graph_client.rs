@@ -519,6 +519,26 @@ impl GraphClient {
         }
     }
 
+    pub async fn delete_mail_folder(
+        &self,
+        token: &str,
+        folder_id: &str,
+    ) -> Result<()> {
+        let encoded_id = urlencoding::encode(folder_id);
+        let req = self
+            .client
+            .delete(&self.url(&format!("/v1.0/me/mailFolders/{}?moveToDeletedItems=true", encoded_id)))
+            .header("Authorization", format!("Bearer {}", token));
+
+        let res = req.send().await.context("delete folder request failed")?;
+        if res.status().is_success() || res.status() == reqwest::StatusCode::NOT_FOUND {
+            Ok(())
+        } else {
+            let body_text = res.text().await.unwrap_or_default();
+            anyhow::bail!("Delete folder failed: {}", body_text)
+        }
+    }
+
     pub async fn delete_message(
         &self,
         token: &str,

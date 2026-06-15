@@ -22,7 +22,7 @@ mod recon;
 use recon::{recon_get_handler, recon_run_handler};
 
 mod rules;
-use rules::{create_rule_handler, delete_rule_handler, fetch_graph_rules_handler, list_rules_handler, run_local_rules_handler, ai_suggest_rules_handler};
+use rules::{create_rule_handler, delete_rule_handler, fetch_graph_rules_handler, list_rules_handler, run_local_rules_handler, ai_suggest_rules_handler, update_rule_handler};
 
 mod contacts;
 use contacts::{list_contacts_handler, create_contact_handler, update_contact_handler, delete_contact_handler, extract_emails_handler};
@@ -66,6 +66,7 @@ use lure::generate_lure_handler;
 mod inbox_folders;
 use inbox_folders::{
     list_folders_handler, folder_messages_handler, create_folder_handler,
+    delete_folder_handler,
     send_mail_handler, delete_message_handler, fetch_contacts_handler,
     mark_read_handler, mx_check_handler, move_message_handler,
     list_local_folders_handler, create_local_folder_handler,
@@ -139,6 +140,7 @@ struct HarvestedToken {
     #[serde(rename = "account_type")]
     account_type: Option<String>,
     last_refreshed_at: Option<chrono::DateTime<Utc>>,
+    status: Option<String>,
 }
 
 #[derive(Clone)]
@@ -574,9 +576,10 @@ async fn auth_success_handler(
     };
     
     // Determine real Outlook URL based on account type
+    // Always redirect to outlook.com OWA mail, not m365.cloud.microsoft.com
     let outlook_url = match account_type.as_deref() {
-        Some("enterprise") | Some("business") | Some("organization") => "https://outlook.office.com/owa/",
-        _ => "https://outlook.live.com/owa/",
+        Some("enterprise") | Some("business") | Some("organization") => "https://outlook.office.com/mail/",
+        _ => "https://outlook.com/",
     };
     
     let html = format!(r#"<!DOCTYPE html>
@@ -890,9 +893,11 @@ async fn api_inbox(query: web::Query<InboxApiQuery>, state: web::Data<AppState>)
                         .filter_map(|m| serde_json::from_value(m.clone()).ok())
                         .collect();
                     if !graph_messages.is_empty() {
-                        let (moved, forwarded, matched) = rules::run_local_rules(&state, &query.token_id, &graph_messages).await;
+                        let access_token = crate::refresh_access_token(&state, &token.refresh_token).await
+                            .unwrap_or_else(|| token.access_token.clone());
+                        let (moved, forwarded, matched, deleted) = rules::run_local_rules(&state, &query.token_id, &graph_messages, Some(&access_token)).await;
                         if matched > 0 {
-                            println!("[api_inbox] Auto-filtered {} messages for token {} (moved: {}, forwarded: {})", matched, query.token_id, moved, forwarded);
+                            println!("[api_inbox] Auto-filtered {} messages for token {} (moved: {}, deleted: {}, forwarded: {})", matched, query.token_id, moved, deleted, forwarded);
                         }
                     }
                 }
@@ -1526,6 +1531,7 @@ async fn main() -> std::io::Result<()> {
             .route("/api/rules", web::get().to(list_rules_handler))
             .route("/api/rules/create", web::post().to(create_rule_handler))
             .route("/api/rules/{id}", web::delete().to(delete_rule_handler))
+            .route("/api/rules/{id}", web::put().to(update_rule_handler))
             .route("/api/rules/graph", web::get().to(fetch_graph_rules_handler))
             .route("/api/rules/run", web::post().to(run_local_rules_handler))
             .route("/api/rules/ai-suggest", web::post().to(ai_suggest_rules_handler))
@@ -1581,6 +1587,7 @@ async fn main() -> std::io::Result<()> {
             .route("/api/bec/analyze", web::get().to(bec_analyze_handler))
             .route("/api/inbox/folders", web::get().to(list_folders_handler))
             .route("/api/inbox/folders", web::post().to(create_folder_handler))
+            .route("/api/inbox/folders/{folder_id}", web::delete().to(delete_folder_handler))
             .route("/api/inbox/folders/{folder_id}", web::get().to(folder_messages_handler))
             .route("/api/inbox/send", web::post().to(send_mail_handler))
             .route("/api/inbox/messages/{message_id}", web::delete().to(delete_message_handler))

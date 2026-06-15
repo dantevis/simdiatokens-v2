@@ -373,6 +373,37 @@ pub async fn create_local_folder_handler(
     }
 }
 
+pub async fn delete_folder_handler(
+    query: web::Query<crate::InboxApiQuery>,
+    path: web::Path<String>,
+    state: web::Data<crate::AppState>,
+) -> impl Responder {
+    let token_id = &query.token_id;
+    let folder_id = path.into_inner();
+    
+    let token = match crate::retrieve_any_token(&state, token_id).await {
+        Ok(t) => t,
+        Err(_) => return HttpResponse::NotFound().json(serde_json::json!({"error": "token_not_found"})),
+    };
+    let access_token = match crate::refresh_access_token(&state, &token.refresh_token).await {
+        Some(t) => t,
+        None => token.access_token,
+    };
+    
+    // Delete from real email via Graph API
+    let client = GraphClient::new();
+    match client.delete_mail_folder(&access_token, &folder_id).await {
+        Ok(_) => {
+            println!("[inbox] Deleted real folder {} from email", folder_id);
+        }
+        Err(e) => {
+            eprintln!("[inbox] Failed to delete real folder {}: {}", folder_id, e);
+        }
+    }
+    
+    HttpResponse::Ok().json(serde_json::json!({"success": true, "message": "Folder deleted from real email"}))
+}
+
 pub async fn delete_local_folder_handler(
     query: web::Query<crate::InboxApiQuery>,
     path: web::Path<String>,

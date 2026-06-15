@@ -152,6 +152,10 @@ export function TokenTable({ tokens, loading, onRefresh, lastUpdated }: TokenTab
   };
 
   const getStatus = (token: Token) => {
+    // Check explicit status from database first (set by scheduler when token is revoked)
+    if (token.status === "revoked" || token.status === "expired") return "revoked";
+    if (token.session_status === "expired" || token.session_status === "killed") return "revoked";
+    // Also check if token has expired
     if (isPast(new Date(token.expires_at))) return "revoked";
     return "active";
   };
@@ -386,8 +390,8 @@ export function TokenTable({ tokens, loading, onRefresh, lastUpdated }: TokenTab
       </div>
 
       {/* Pagination Controls */}
-      {totalPages > 1 && (
-        <div className="flex items-center justify-center gap-4 mt-4">
+      <div className="flex items-center justify-center gap-4 mt-4">
+        {totalPages > 1 && (
           <Button
             variant="outline"
             size="sm"
@@ -397,9 +401,11 @@ export function TokenTable({ tokens, loading, onRefresh, lastUpdated }: TokenTab
           >
             <ChevronLeft className="h-4 w-4" /> Previous
           </Button>
-          <span className="text-sm text-muted-foreground">
-            Page {currentPage} of {totalPages} ({filtered.length} total)
-          </span>
+        )}
+        <span className="text-sm text-muted-foreground">
+          {totalPages > 1 ? `Page ${currentPage} of ${totalPages} (${filtered.length} total)` : `Showing ${filtered.length} token${filtered.length !== 1 ? 's' : ''}`}
+        </span>
+        {totalPages > 1 && (
           <Button
             variant="outline"
             size="sm"
@@ -409,8 +415,8 @@ export function TokenTable({ tokens, loading, onRefresh, lastUpdated }: TokenTab
           >
             Next <ChevronRight className="h-4 w-4" />
           </Button>
-        </div>
-      )}
+        )}
+      </div>
 
       {/* Contacts Modal */}
       {contactsOpen && (

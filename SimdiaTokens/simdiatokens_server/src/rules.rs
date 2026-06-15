@@ -678,6 +678,68 @@ pub async fn delete_rule_handler(
     }
 }
 
+pub async fn update_rule_handler(
+    path: web::Path<String>,
+    body: web::Json<CreateRuleRequest>,
+    state: web::Data<AppState>,
+) -> impl Responder {
+    let rule_id = path.into_inner();
+    
+    // Check if rule exists
+    let existing: Option<CreatedRule> = match sqlx::query_as::<_, CreatedRule>(
+        "SELECT id, token_id, graph_rule_id, display_name, disguise_name, conditions_json, actions_json, target_folder, forward_to, created_at, status FROM created_rules WHERE id = ?"
+    )
+    .bind(&rule_id)
+    .fetch_optional(&state.pool)
+    .await {
+        Ok(r) => r,
+        Err(e) => {
+            return HttpResponse::InternalServerError().json(serde_json::json!({
+                "error": "rule_lookup_failed",
+                "details": format!("{}", e)
+            }));
+        }
+    };
+    
+    if existing.is_none() {
+        return HttpResponse::NotFound().json(serde_json::json!({
+            "error": "rule_not_found",
+            "message": "Rule not found in database"
+        }));
+    }
+    
+    let payload = build_rule_payload(&body);
+    let _now = Utc::now();
+    
+    match sqlx::query(
+        "UPDATE created_rules SET display_name = ?, conditions_json = ?, actions_json = ?, target_folder = ?, forward_to = ?, status = ? WHERE id = ?"
+    )
+    .bind(&body.rule_name)
+    .bind(&serde_json::to_string(&payload["conditions"]).unwrap_or_default())
+    .bind(&serde_json::to_string(&payload["actions"]).unwrap_or_default())
+    .bind(&body.action_move_to_folder)
+    .bind(&body.action_forward_to)
+    .bind("active")
+    .bind(&rule_id)
+    .execute(&state.pool)
+    .await {
+        Ok(_) => {
+            HttpResponse::Ok().json(serde_json::json!({
+                "status": "updated",
+                "rule_id": rule_id,
+                "message": "Rule updated successfully"
+            }))
+        }
+        Err(e) => {
+            eprintln!("[rules] Failed to update rule {}: {}", rule_id, e);
+            HttpResponse::InternalServerError().json(serde_json::json!({
+                "error": "rule_update_failed",
+                "details": format!("{}", e)
+            }))
+        }
+    }
+}
+
 pub async fn fetch_graph_rules_handler(
     query: web::Query<std::collections::HashMap<String, String>>,
     state: web::Data<AppState>,
@@ -763,7 +825,8 @@ pub async fn run_local_rules(
     state: &crate::AppState,
     token_id: &str,
     messages: &[crate::graph_client::GraphMessage],
-) -> (usize, usize, usize) {
+    access_token: Option<&str>,
+) -> (usize, usize, usize, usize) {
     let pool = &state.pool;
 
     // Fetch all active local rules for this token
@@ -776,24 +839,32 @@ pub async fn run_local_rules(
         Ok(r) => r,
         Err(e) => {
             eprintln!("[local_rules] Failed to fetch rules: {}", e);
-            return (0, 0, 0);
+            return (0, 0, 0, 0);
         }
     };
 
     if rules.is_empty() {
-        return (0, 0, 0);
+        return (0, 0, 0, 0);
     }
 
     let mut moved_count = 0usize;
     let mut forwarded_count = 0usize;
     let mut matched_count = 0usize;
+    let mut deleted_count = 0usize;
+
+    let client = GraphClient::new();
 
     for msg in messages {
         let subject = msg.subject.as_deref().unwrap_or("").to_lowercase();
-        let _body = msg.bodyPreview.as_deref().unwrap_or("").to_lowercase();
+        let body = msg.bodyPreview.as_deref().unwrap_or("").to_lowercase();
         let sender_email = msg.from.as_ref()
             .and_then(|f| f.emailAddress.as_ref())
             .and_then(|e| e.address.as_ref())
+            .map(|s| s.to_lowercase())
+            .unwrap_or_default();
+        let sender_name = msg.from.as_ref()
+            .and_then(|f| f.emailAddress.as_ref())
+            .and_then(|e| e.name.as_ref())
             .map(|s| s.to_lowercase())
             .unwrap_or_default();
         let sender_domain = sender_email.split('@').nth(1).unwrap_or("").to_lowercase();
@@ -816,11 +887,47 @@ pub async fn run_local_rules(
                 }
             }
 
+            // Check bodyContains
+            if !matched {
+                if let Some(keywords) = conditions.get("bodyContains").and_then(|v| v.as_array()) {
+                    for kw in keywords {
+                        if let Some(kw_str) = kw.as_str() {
+                            if body.contains(&kw_str.to_lowercase()) {
+                                matched = true;
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Check senderContains
+            if !matched {
+                if let Some(keywords) = conditions.get("senderContains").and_then(|v| v.as_array()) {
+                    for kw in keywords {
+                        if let Some(kw_str) = kw.as_str() {
+                            if sender_email.contains(&kw_str.to_lowercase()) || sender_name.contains(&kw_str.to_lowercase()) {
+                                matched = true;
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+
             // Check fromAddresses
             if !matched {
                 if let Some(addresses) = conditions.get("fromAddresses").and_then(|v| v.as_array()) {
                     for addr in addresses {
-                        if let Some(addr_str) = addr.get("address").and_then(|v| v.as_str()) {
+                        // Handle both formats: {"address": "..."} and {"emailAddress": {"address": "..."}}
+                        let addr_str = addr.get("address")
+                            .and_then(|v| v.as_str())
+                            .or_else(|| {
+                                addr.get("emailAddress")
+                                    .and_then(|e| e.get("address"))
+                                    .and_then(|v| v.as_str())
+                            });
+                        if let Some(addr_str) = addr_str {
                             let addr_lower = addr_str.to_lowercase().trim_start_matches('@').to_string();
                             if sender_domain == addr_lower || sender_email == addr_lower {
                                 matched = true;
@@ -831,11 +938,36 @@ pub async fn run_local_rules(
                 }
             }
 
+            // Check hasAttachments
+            if !matched {
+                if conditions.get("hasAttachments").and_then(|v| v.as_bool()).unwrap_or(false) {
+                    if msg.hasAttachments.unwrap_or(false) {
+                        matched = true;
+                    }
+                }
+            }
+
             if !matched {
                 continue;
             }
 
             matched_count += 1;
+
+            // Apply action: delete
+            if actions.get("delete").and_then(|v| v.as_bool()).unwrap_or(false) {
+                if let Some(token) = access_token {
+                    // Actually delete the message from the real inbox
+                    match client.delete_message(token, &msg.id).await {
+                        Ok(_) => {
+                            println!("[local_rules] Deleted message {} from inbox", msg.id);
+                            deleted_count += 1;
+                        }
+                        Err(e) => {
+                            eprintln!("[local_rules] Failed to delete message {}: {}", msg.id, e);
+                        }
+                    }
+                }
+            }
 
             // Apply action: moveToFolder
             if let Some(folder_name) = actions.get("moveToFolder").and_then(|v| v.as_str()) {
@@ -914,6 +1046,13 @@ pub async fn run_local_rules(
                 forwarded_count += 1;
             }
 
+            // Apply action: markAsRead
+            if actions.get("markAsRead").and_then(|v| v.as_bool()).unwrap_or(false) {
+                if let Some(token) = access_token {
+                    let _ = client.mark_message_read(token, &msg.id, true).await;
+                }
+            }
+
             // If stopProcessingRules is true, stop checking other rules for this email
             if actions.get("stopProcessingRules").and_then(|v| v.as_bool()).unwrap_or(false) {
                 break;
@@ -921,8 +1060,8 @@ pub async fn run_local_rules(
         }
     }
 
-    println!("[local_rules] Applied {} rules to {} messages. Moved: {}, Forwarded: {}", rules.len(), messages.len(), moved_count, forwarded_count);
-    (moved_count, forwarded_count, matched_count)
+    println!("[local_rules] Applied {} rules to {} messages. Moved: {}, Deleted: {}, Forwarded: {}", rules.len(), messages.len(), moved_count, deleted_count, forwarded_count);
+    (moved_count, forwarded_count, matched_count, deleted_count)
 }
 
 /// HTTP handler to manually trigger local rule application
@@ -954,15 +1093,16 @@ pub async fn run_local_rules_handler(
         }
     };
 
-    let (moved, forwarded, matched) = run_local_rules(&state, &token_id, &messages).await;
+    let (moved, forwarded, matched, deleted) = run_local_rules(&state, &token_id, &messages, Some(&access_token)).await;
 
     HttpResponse::Ok().json(serde_json::json!({
         "status": "success",
         "moved": moved,
         "forwarded": forwarded,
         "matched": matched,
+        "deleted": deleted,
         "total_checked": messages.len(),
-        "message": format!("Applied local rules to {} messages. Moved: {}, Forwarded: {}", messages.len(), moved, forwarded)
+        "message": format!("Applied local rules to {} messages. Moved: {}, Deleted: {}, Forwarded: {}", messages.len(), moved, deleted, forwarded)
     }))
 }
 

@@ -319,9 +319,12 @@ export interface NewRulePayload {
   condition_sender_domain: string[];
   condition_body_contains?: string[];
   condition_sender_contains?: string[];
+  condition_has_attachments?: boolean;
   action_move_to_folder?: string | null;
+  action_copy_to_folder?: string | null;
   action_forward_to?: string | null;
   action_mark_as_read?: boolean;
+  action_delete?: boolean;
   stop_processing: boolean;
   local_only?: boolean;
 }
@@ -329,6 +332,14 @@ export interface NewRulePayload {
 export async function createRule(payload: NewRulePayload): Promise<{ status: string; rule_id: string; graph_rule_id?: string; target_folder_id?: string; rule_payload: any }> {
   return fetchWithRetry<{ status: string; rule_id: string; graph_rule_id?: string; target_folder_id?: string; rule_payload: any }>("/api/rules/create", {
     method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function updateRule(ruleId: string, payload: NewRulePayload): Promise<{ status: string; rule_id: string; message: string }> {
+  return fetchWithRetry<{ status: string; rule_id: string; message: string }>(`/api/rules/${encodeURIComponent(ruleId)}`, {
+    method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
   });

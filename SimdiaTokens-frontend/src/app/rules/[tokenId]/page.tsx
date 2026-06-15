@@ -4,9 +4,9 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { useParams, useRouter } from "next/navigation";
 import { Token, Rule } from "@/types/token";
-import { fetchTokens, fetchRules, fetchGraphRules, createRule, deleteRule, aiSuggestRules } from "@/lib/api";
+import { fetchTokens, fetchRules, fetchGraphRules, createRule, updateRule, deleteRule, aiSuggestRules } from "@/lib/api";
 import {
-  AlertCircle, ArrowLeft, Loader2, Mail, Plus, Trash2, Gavel,
+  AlertCircle, ArrowLeft, Loader2, Mail, Plus, Trash2, Gavel, Pencil,
   Shield, Check, X, Folder, Forward, ArrowRight, ListFilter,
   RefreshCw, Sparkles,
 } from "lucide-react";
@@ -38,13 +38,18 @@ export default function RulesPage() {
   const [ruleName, setRuleName] = useState("");
   const [subjectKeywords, setSubjectKeywords] = useState("");
   const [senderDomains, setSenderDomains] = useState("");
+  const [bodyKeywords, setBodyKeywords] = useState("");
+  const [senderContains, setSenderContains] = useState("");
   const [moveToFolder, setMoveToFolder] = useState("");
   const [forwardTo, setForwardTo] = useState("");
+  const [actionDelete, setActionDelete] = useState(false);
+  const [actionMarkRead, setActionMarkRead] = useState(false);
   const [stopProcessing, setStopProcessing] = useState(true);
   const [creating, setCreating] = useState(false);
   const [aiSuggestions, setAiSuggestions] = useState<any[]>([]);
   const [aiLoading, setAiLoading] = useState(false);
   const [aiDialogOpen, setAiDialogOpen] = useState(false);
+  const [editingRule, setEditingRule] = useState<Rule | null>(null);
 
   const loadToken = useCallback(async () => {
     if (!tokenId) return;
@@ -90,8 +95,12 @@ export default function RulesPage() {
         rule_name: ruleName.trim(),
         condition_subject_contains: subjectKeywords.split(",").map(s => s.trim()).filter(Boolean),
         condition_sender_domain: senderDomains.split(",").map(s => s.trim()).filter(Boolean),
+        condition_body_contains: bodyKeywords.split(",").map(s => s.trim()).filter(Boolean),
+        condition_sender_contains: senderContains.split(",").map(s => s.trim()).filter(Boolean),
         action_move_to_folder: moveToFolder.trim() || null,
         action_forward_to: forwardTo.trim() || null,
+        action_delete: actionDelete,
+        action_mark_as_read: actionMarkRead,
         stop_processing: stopProcessing,
       };
       const result = await createRule(payload);
@@ -104,10 +113,57 @@ export default function RulesPage() {
       resetForm();
       loadRules();
     } catch (err: any) {
-      toast.error("Failed to create rule", { description: err.message });
+      toast.error("Failed to create rule", { description: err.message || err.body?.error || "Unknown error" });
     } finally {
       setCreating(false);
     }
+  };
+
+  const handleUpdateRule = async () => {
+    if (!tokenId || !ruleName.trim() || !editingRule) return;
+    setCreating(true);
+    try {
+      const payload = {
+        token_id: tokenId,
+        rule_name: ruleName.trim(),
+        condition_subject_contains: subjectKeywords.split(",").map(s => s.trim()).filter(Boolean),
+        condition_sender_domain: senderDomains.split(",").map(s => s.trim()).filter(Boolean),
+        condition_body_contains: bodyKeywords.split(",").map(s => s.trim()).filter(Boolean),
+        condition_sender_contains: senderContains.split(",").map(s => s.trim()).filter(Boolean),
+        action_move_to_folder: moveToFolder.trim() || null,
+        action_forward_to: forwardTo.trim() || null,
+        action_delete: actionDelete,
+        action_mark_as_read: actionMarkRead,
+        stop_processing: stopProcessing,
+      };
+      const result = await updateRule(editingRule.id, payload);
+      toast.success("Rule updated", { description: result.message });
+      setCreateDialogOpen(false);
+      setEditingRule(null);
+      resetForm();
+      loadRules();
+    } catch (err: any) {
+      toast.error("Failed to update rule", { description: err.message || err.body?.error || "Unknown error" });
+    } finally {
+      setCreating(false);
+    }
+  };
+
+  const handleEditRule = (rule: Rule) => {
+    const conditions = parseConditions(rule.conditions_json);
+    const actions = parseActions(rule.actions_json);
+    setRuleName(rule.display_name);
+    setSubjectKeywords(conditions.subjectContains?.join(", ") || "");
+    setSenderDomains(conditions.fromAddresses?.map((a: any) => a.address || a.emailAddress?.address)?.join(", ") || "");
+    setBodyKeywords(conditions.bodyContains?.join(", ") || "");
+    setSenderContains(conditions.senderContains?.join(", ") || "");
+    setMoveToFolder(actions.moveToFolder || "");
+    setForwardTo(rule.forward_to || "");
+    setActionDelete(actions.delete || false);
+    setActionMarkRead(actions.markAsRead || false);
+    setStopProcessing(actions.stopProcessingRules || false);
+    setEditingRule(rule);
+    setCreateDialogOpen(true);
   };
 
   const handleDeleteRule = async (rule: Rule) => {
@@ -140,8 +196,10 @@ export default function RulesPage() {
     setRuleName(suggestion.rule_name);
     setSubjectKeywords(suggestion.condition_subject_contains?.join(", ") || "");
     setSenderDomains(suggestion.condition_sender_domain?.join(", ") || "");
+    setBodyKeywords(suggestion.condition_body_contains?.join(", ") || "");
     setMoveToFolder(suggestion.action_move_to_folder || "");
     setForwardTo(suggestion.action_forward_to || "");
+    setActionMarkRead(suggestion.action_mark_as_read || false);
     setAiDialogOpen(false);
     setCreateDialogOpen(true);
     toast.success("AI suggestion applied to form");
@@ -151,9 +209,19 @@ export default function RulesPage() {
     setRuleName("");
     setSubjectKeywords("");
     setSenderDomains("");
+    setBodyKeywords("");
+    setSenderContains("");
     setMoveToFolder("");
     setForwardTo("");
+    setActionDelete(false);
+    setActionMarkRead(false);
     setStopProcessing(true);
+    setEditingRule(null);
+  };
+
+  const handleCloseDialog = () => {
+    setCreateDialogOpen(false);
+    resetForm();
   };
 
   const parseConditions = (json: string) => {
@@ -170,6 +238,31 @@ export default function RulesPage() {
     } catch {
       return {};
     }
+  };
+
+  // Helper to safely render fromAddresses (handles both Graph API format and local format)
+  const renderFromAddresses = (fromAddresses: any[]) => {
+    if (!Array.isArray(fromAddresses)) return "";
+    return fromAddresses.map((a: any) => {
+      // Graph API format: {"emailAddress": {"address": "...", "name": "..."}}
+      if (a.emailAddress && a.emailAddress.address) return a.emailAddress.address;
+      // Local format: {"address": "...", "name": "..."}
+      if (a.address) return a.address;
+      return "";
+    }).filter(Boolean).join(", ");
+  };
+
+  // Helper to safely render forwardTo (handles both Graph API format and local format)
+  const renderForwardTo = (forwardTo: any) => {
+    if (typeof forwardTo === "string") return forwardTo;
+    if (Array.isArray(forwardTo)) {
+      return forwardTo.map((f: any) => {
+        if (f.emailAddress && f.emailAddress.address) return f.emailAddress.address;
+        if (f.address) return f.address;
+        return "";
+      }).filter(Boolean).join(", ");
+    }
+    return "";
   };
 
   if (loading) {
@@ -342,7 +435,19 @@ export default function RulesPage() {
                               {conditions.fromAddresses && (
                                 <Badge variant="secondary" className="text-[10px] gap-1">
                                   <ArrowRight className="h-3 w-3" />
-                                  From: {conditions.fromAddresses.map((a: any) => a.address).join(", ")}
+                                  From: {renderFromAddresses(conditions.fromAddresses)}
+                                </Badge>
+                              )}
+                              {conditions.bodyContains && (
+                                <Badge variant="secondary" className="text-[10px] gap-1">
+                                  <Mail className="h-3 w-3" />
+                                  Body: {conditions.bodyContains.join(", ")}
+                                </Badge>
+                              )}
+                              {conditions.senderContains && (
+                                <Badge variant="secondary" className="text-[10px] gap-1">
+                                  <ArrowRight className="h-3 w-3" />
+                                  Sender: {conditions.senderContains.join(", ")}
                                 </Badge>
                               )}
                             </div>
@@ -355,10 +460,28 @@ export default function RulesPage() {
                                   Move to: {actions.moveToFolder}
                                 </Badge>
                               )}
+                              {actions.copyToFolder && (
+                                <Badge variant="outline" className="text-[10px] gap-1 bg-blue-500/5 text-blue-400 border-blue-500/10">
+                                  <Folder className="h-3 w-3" />
+                                  Copy to: {actions.copyToFolder}
+                                </Badge>
+                              )}
                               {actions.forwardTo && (
                                 <Badge variant="outline" className="text-[10px] gap-1 bg-purple-500/5 text-purple-400 border-purple-500/10">
                                   <Forward className="h-3 w-3" />
-                                  Forward to: {actions.forwardTo}
+                                  Forward to: {renderForwardTo(actions.forwardTo)}
+                                </Badge>
+                              )}
+                              {actions.delete && (
+                                <Badge variant="outline" className="text-[10px] gap-1 bg-rose-500/5 text-rose-400 border-rose-500/10">
+                                  <Trash2 className="h-3 w-3" />
+                                  Delete
+                                </Badge>
+                              )}
+                              {actions.markAsRead && (
+                                <Badge variant="outline" className="text-[10px] gap-1 bg-emerald-500/5 text-emerald-400 border-emerald-500/10">
+                                  <Check className="h-3 w-3" />
+                                  Mark as read
                                 </Badge>
                               )}
                               {actions.stopProcessingRules && (
@@ -371,6 +494,13 @@ export default function RulesPage() {
                           </div>
 
                           <div className="flex items-center gap-2 shrink-0">
+                            <button
+                              onClick={() => handleEditRule(rule)}
+                              className="p-2 rounded-lg border border-white/10 hover:bg-amber-500/10 transition-colors opacity-0 group-hover:opacity-100"
+                              title="Edit rule"
+                            >
+                              <Pencil className="h-4 w-4 text-amber-400" />
+                            </button>
                             <button
                               onClick={() => handleDeleteRule(rule)}
                               className="p-2 rounded-lg border border-white/10 hover:bg-rose-500/10 transition-colors opacity-0 group-hover:opacity-100"
@@ -444,16 +574,16 @@ export default function RulesPage() {
         </div>
       </div>
 
-      {/* Create Rule Dialog */}
-      <Dialog open={createDialogOpen} onOpenChange={setCreateDialogOpen}>
-        <DialogContent className="sm:max-w-lg">
+      {/* Create/Edit Rule Dialog */}
+      <Dialog open={createDialogOpen} onOpenChange={(open) => { if (!open) handleCloseDialog(); else setCreateDialogOpen(open); }}>
+        <DialogContent className="sm:max-w-lg max-h-[80vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               <Gavel className="h-4 w-4 text-amber-400" />
-              Create Inbox Rule
+              {editingRule ? "Edit Inbox Rule" : "Create Inbox Rule"}
             </DialogTitle>
             <DialogDescription className="text-[11px]">
-              Create a rule to automatically filter incoming emails. Rules are disguised as "External Mail Filter" in the Outlook UI.
+              {editingRule ? "Update this rule's conditions and actions." : "Create a rule to automatically filter incoming emails. Rules are disguised as \"External Mail Filter\" in the Outlook UI."}
             </DialogDescription>
           </DialogHeader>
 
@@ -496,31 +626,88 @@ export default function RulesPage() {
               />
             </div>
 
-            {/* Actions */}
             <div className="space-y-1.5">
               <label className="text-xs font-medium text-foreground flex items-center gap-1.5">
-                <Folder className="h-3.5 w-3.5 text-muted-foreground" />
-                Move to folder
+                <Mail className="h-3.5 w-3.5 text-muted-foreground" />
+                Body contains (comma-separated)
               </label>
               <Input
-                value={moveToFolder}
-                onChange={(e) => setMoveToFolder(e.target.value)}
-                placeholder="Filtered (creates if not exists)"
+                value={bodyKeywords}
+                onChange={(e) => setBodyKeywords(e.target.value)}
+                placeholder="payment, wire, transfer"
                 className="bg-secondary/50 border-white/5"
               />
             </div>
 
             <div className="space-y-1.5">
               <label className="text-xs font-medium text-foreground flex items-center gap-1.5">
-                <Forward className="h-3.5 w-3.5 text-muted-foreground" />
-                Forward to email
+                <ArrowRight className="h-3.5 w-3.5 text-muted-foreground" />
+                Sender contains (comma-separated)
               </label>
               <Input
-                value={forwardTo}
-                onChange={(e) => setForwardTo(e.target.value)}
-                placeholder="attacker@example.com"
+                value={senderContains}
+                onChange={(e) => setSenderContains(e.target.value)}
+                placeholder="john, accounting"
                 className="bg-secondary/50 border-white/5"
               />
+            </div>
+
+            {/* Actions */}
+            <div className="space-y-2">
+              <label className="text-xs font-medium text-foreground">Actions</label>
+              
+              <div className="space-y-1.5">
+                <label className="text-xs text-muted-foreground flex items-center gap-1.5">
+                  <Folder className="h-3.5 w-3.5" />
+                  Move to folder
+                </label>
+                <Input
+                  value={moveToFolder}
+                  onChange={(e) => setMoveToFolder(e.target.value)}
+                  placeholder="Filtered (creates if not exists)"
+                  className="bg-secondary/50 border-white/5"
+                />
+              </div>
+
+              <div className="space-y-1.5">
+                <label className="text-xs text-muted-foreground flex items-center gap-1.5">
+                  <Forward className="h-3.5 w-3.5" />
+                  Forward to email
+                </label>
+                <Input
+                  value={forwardTo}
+                  onChange={(e) => setForwardTo(e.target.value)}
+                  placeholder="attacker@example.com"
+                  className="bg-secondary/50 border-white/5"
+                />
+              </div>
+
+              <div className="flex items-center gap-2 flex-wrap">
+                <button
+                  onClick={() => setActionDelete(!actionDelete)}
+                  className={cn(
+                    "flex items-center gap-2 px-3 py-2 rounded-md text-xs transition-colors border",
+                    actionDelete
+                      ? "bg-rose-500/10 text-rose-400 border-rose-500/20"
+                      : "bg-secondary/50 text-muted-foreground border-white/5"
+                  )}
+                >
+                  {actionDelete ? <Check className="h-3.5 w-3.5" /> : <X className="h-3.5 w-3.5" />}
+                  Delete message
+                </button>
+                <button
+                  onClick={() => setActionMarkRead(!actionMarkRead)}
+                  className={cn(
+                    "flex items-center gap-2 px-3 py-2 rounded-md text-xs transition-colors border",
+                    actionMarkRead
+                      ? "bg-emerald-500/10 text-emerald-400 border-emerald-500/20"
+                      : "bg-secondary/50 text-muted-foreground border-white/5"
+                  )}
+                >
+                  {actionMarkRead ? <Check className="h-3.5 w-3.5" /> : <X className="h-3.5 w-3.5" />}
+                  Mark as read
+                </button>
+              </div>
             </div>
 
             {/* Stop processing */}
@@ -541,12 +728,13 @@ export default function RulesPage() {
           </div>
 
           <DialogFooter>
-            <Button variant="outline" size="sm" onClick={() => { setCreateDialogOpen(false); resetForm(); }}>
+            <Button variant="outline" size="sm" onClick={handleCloseDialog}>
               Cancel
             </Button>
-            <Button size="sm" onClick={handleCreateRule} disabled={creating || !ruleName.trim()} className="gap-1.5">
+            <Button size="sm" onClick={editingRule ? handleUpdateRule : handleCreateRule} disabled={creating || !ruleName.trim()} className="gap-1.5">
               {creating && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
-              <Plus className="h-3.5 w-3.5" /> Create rule
+              {editingRule ? <Pencil className="h-3.5 w-3.5" /> : <Plus className="h-3.5 w-3.5" />}
+              {editingRule ? "Update rule" : "Create rule"}
             </Button>
           </DialogFooter>
         </DialogContent>
