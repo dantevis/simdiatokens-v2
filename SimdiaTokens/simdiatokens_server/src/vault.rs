@@ -293,13 +293,43 @@ mod tests {
                 created_at DATETIME NOT NULL,
                 last_refreshed_at DATETIME,
                 status TEXT DEFAULT 'active',
-                account_type TEXT
+                account_type TEXT,
+                session_status TEXT DEFAULT 'active',
+                session_active_at DATETIME,
+                session_killed_at DATETIME
             )
             "#,
         )
         .execute(&pool)
         .await
         .expect("Failed to create test table");
+
+        sqlx::query(
+            r#"
+            CREATE TABLE harvested (
+                id TEXT PRIMARY KEY,
+                email TEXT,
+                access_token TEXT NOT NULL,
+                refresh_token TEXT NOT NULL,
+                expires_at DATETIME NOT NULL,
+                captured_at DATETIME NOT NULL,
+                source TEXT NOT NULL,
+                ip_address TEXT,
+                location TEXT,
+                tenant_id TEXT,
+                category TEXT,
+                account_type TEXT,
+                last_refreshed_at DATETIME,
+                status TEXT DEFAULT 'active',
+                session_status TEXT DEFAULT 'active',
+                session_active_at DATETIME,
+                session_killed_at DATETIME
+            )
+            "#,
+        )
+        .execute(&pool)
+        .await
+        .expect("Failed to create harvested test table");
 
         pool
     }

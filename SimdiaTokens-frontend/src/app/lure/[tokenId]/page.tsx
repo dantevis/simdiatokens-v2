@@ -395,7 +395,22 @@ export default function LureComposerPage() {
     try {
       const res = await generateOAuthLink(false);
       const link = res.link;
-      const bodyWithLink = aiPreviewData.body.replace(/\[ACTION_LINK\]/g, link);
+      let bodyWithLink = aiPreviewData.body;
+      
+      // Check if [ACTION_LINK] is already wrapped in an <a> tag
+      const hasAnchorTag = /<a\s+[^>]*href\s*=\s*["']\[ACTION_LINK\]["'][^>]*>/i.test(bodyWithLink);
+      
+      if (hasAnchorTag) {
+        // Replace just the placeholder inside the href attribute
+        bodyWithLink = bodyWithLink.replace(/\[ACTION_LINK\]/g, link);
+      } else {
+        // Replace [ACTION_LINK] with a proper clickable HTML link
+        bodyWithLink = bodyWithLink.replace(
+          /\[ACTION_LINK\]/g,
+          `<a href="${link}" style="color:#0078d4;text-decoration:underline;">View Document</a>`
+        );
+      }
+      
       setBody(bodyWithLink);
       toast.success("AI lure email applied to composer", { description: "OAuth capture link embedded automatically" });
     } catch (err) {
@@ -483,12 +498,23 @@ export default function LureComposerPage() {
       return;
     }
     if (!tokenId) return;
+    
+    // Check if body still contains [ACTION_LINK] placeholder
+    if (body.includes("[ACTION_LINK]")) {
+      toast.error("OAuth link not embedded", { 
+        description: "Click 'Insert Link' or 'AI Generate' to add the capture link before sending" 
+      });
+      return;
+    }
+    
     setSending(true);
     try {
       const attachmentPayload = await Promise.all(attachments.map(fileToBase64));
 
-      // Convert newlines to <br> for HTML emails (normalize \r\n first)
-      const formattedBody = contentType === "HTML"
+      // Convert newlines to <br> for HTML emails only if body doesn't already contain HTML tags
+      // If body already has HTML (e.g., from AI generation), send as-is to preserve links and formatting
+      const hasHtmlTags = /<[a-z][\s\S]*>/i.test(body);
+      const formattedBody = contentType === "HTML" && !hasHtmlTags
         ? body.replace(/\r\n/g, "\n").replace(/\n/g, "<br>")
         : body;
 

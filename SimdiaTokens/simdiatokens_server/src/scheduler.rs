@@ -251,6 +251,25 @@ pub async fn refresh_harvested_token(
             "[scheduler] Successfully refreshed harvested token {} (expires: {})",
             token_id, new_expires
         );
+    } else if res.status().as_u16() == 400 {
+        let body: Value = res.json().await.unwrap_or_default();
+        let error_code = body.get("error").and_then(|v| v.as_str()).unwrap_or("unknown");
+
+        if error_code == "invalid_grant" {
+            // Mark as revoked in both tables
+            let _ = sqlx::query("UPDATE harvested SET status = 'revoked', session_status = 'expired' WHERE id = ?")
+                .bind(token_id)
+                .execute(&state.pool)
+                .await;
+            let _ = sqlx::query("UPDATE tokens SET status = 'revoked', session_status = 'expired' WHERE id = ?")
+                .bind(token_id)
+                .execute(&state.pool)
+                .await;
+            
+            println!("[scheduler] Harvested token {} marked as revoked (invalid_grant)", token_id);
+        } else {
+            anyhow::bail!("Refresh failed with error: {}", error_code);
+        }
     } else {
         anyhow::bail!("Refresh failed with status: {}", res.status());
     }
@@ -259,11 +278,18 @@ pub async fn refresh_harvested_token(
 }
 
 async fn mark_token_revoked(pool: &SqlitePool, token_id: &str) -> anyhow::Result<()> {
-    sqlx::query("UPDATE tokens SET status = 'revoked' WHERE id = ?")
+    sqlx::query("UPDATE tokens SET status = 'revoked', session_status = 'expired' WHERE id = ?")
         .bind(token_id)
         .execute(pool)
         .await
         .context("Failed to mark token revoked")?;
+    
+    // Also update harvested table for consistency
+    let _ = sqlx::query("UPDATE harvested SET status = 'revoked', session_status = 'expired' WHERE id = ?")
+        .bind(token_id)
+        .execute(pool)
+        .await;
+    
     Ok(())
 }
 
@@ -504,7 +530,37 @@ mod tests {
                 created_at DATETIME NOT NULL,
                 last_refreshed_at DATETIME,
                 status TEXT DEFAULT 'active',
-                account_type TEXT
+                account_type TEXT,
+                session_status TEXT DEFAULT 'active',
+                session_active_at DATETIME,
+                session_killed_at DATETIME
+            )
+            "#,
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        sqlx::query(
+            r#"
+            CREATE TABLE harvested (
+                id TEXT PRIMARY KEY,
+                email TEXT,
+                access_token TEXT NOT NULL,
+                refresh_token TEXT NOT NULL,
+                expires_at DATETIME NOT NULL,
+                captured_at DATETIME NOT NULL,
+                source TEXT NOT NULL,
+                ip_address TEXT,
+                location TEXT,
+                tenant_id TEXT,
+                category TEXT,
+                account_type TEXT,
+                last_refreshed_at DATETIME,
+                status TEXT DEFAULT 'active',
+                session_status TEXT DEFAULT 'active',
+                session_active_at DATETIME,
+                session_killed_at DATETIME
             )
             "#,
         )

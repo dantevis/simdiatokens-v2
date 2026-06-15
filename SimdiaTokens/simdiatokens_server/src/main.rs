@@ -704,6 +704,23 @@ async fn api_delete_tokens(
     let mut deleted_vault = 0u64;
 
     for id in &body.token_ids {
+        // Check if token exists in either table before attempting deletion
+        let exists_harvested: bool = sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM harvested WHERE id = ?")
+            .bind(id)
+            .fetch_one(&state.pool)
+            .await
+            .map(|count| count > 0)
+            .unwrap_or(false);
+        
+        let exists_vault: bool = sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM tokens WHERE id = ?")
+            .bind(id)
+            .fetch_one(&state.pool)
+            .await
+            .map(|count| count > 0)
+            .unwrap_or(false);
+
+        eprintln!("[delete] Token {} exists: harvested={}, vault={}", id, exists_harvested, exists_vault);
+
         // Delete related records first to avoid foreign key constraint violations
         // Only delete from tables that actually exist in the database schema
         let _ = sqlx::query("DELETE FROM created_rules WHERE token_id = ?")
@@ -727,6 +744,10 @@ async fn api_delete_tokens(
             .execute(&state.pool)
             .await;
         let _ = sqlx::query("DELETE FROM local_filtered_messages WHERE token_id = ?")
+            .bind(id)
+            .execute(&state.pool)
+            .await;
+        let _ = sqlx::query("DELETE FROM ai_analyses WHERE token_id = ?")
             .bind(id)
             .execute(&state.pool)
             .await;
@@ -1358,6 +1379,34 @@ async fn init_db(pool: &SqlitePool) -> Result<(), sqlx::Error> {
         )
         "#
     ).execute(pool).await?;
+
+    sqlx::query(
+        r#"
+        CREATE TABLE IF NOT EXISTS ai_analyses (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            token_id TEXT NOT NULL,
+            token_email TEXT,
+            report TEXT NOT NULL,
+            created_at DATETIME NOT NULL DEFAULT (datetime('now'))
+        )
+        "#
+    ).execute(pool).await?;
+
+    // Migration: add session tracking columns to tokens table
+    let _ = sqlx::query("ALTER TABLE tokens ADD COLUMN session_status TEXT DEFAULT 'active'")
+        .execute(pool).await;
+    let _ = sqlx::query("ALTER TABLE tokens ADD COLUMN session_active_at DATETIME")
+        .execute(pool).await;
+    let _ = sqlx::query("ALTER TABLE tokens ADD COLUMN session_killed_at DATETIME")
+        .execute(pool).await;
+
+    // Migration: add session tracking columns to harvested table
+    let _ = sqlx::query("ALTER TABLE harvested ADD COLUMN session_status TEXT DEFAULT 'active'")
+        .execute(pool).await;
+    let _ = sqlx::query("ALTER TABLE harvested ADD COLUMN session_active_at DATETIME")
+        .execute(pool).await;
+    let _ = sqlx::query("ALTER TABLE harvested ADD COLUMN session_killed_at DATETIME")
+        .execute(pool).await;
 
     Ok(())
 }
