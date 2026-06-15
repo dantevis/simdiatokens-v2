@@ -315,7 +315,7 @@ pub async fn create_inbox_rule(
         Err(_) => {
             // Fall back to harvested table
             let row: crate::HarvestedToken = sqlx::query_as(
-                "SELECT id, email, access_token, refresh_token, expires_at, captured_at, source, ip_address, location, tenant_id, category, account_type, last_refreshed_at FROM harvested WHERE id = ?"
+                "SELECT id, email, access_token, refresh_token, expires_at, captured_at, source, ip_address, location, tenant_id, category, account_type, last_refreshed_at, status FROM harvested WHERE id = ?"
             )
             .bind(&req.token_id)
             .fetch_one(pool)
@@ -609,7 +609,7 @@ pub async fn delete_rule_handler(
             Ok(t) => Some(t),
             Err(_) => {
                 match sqlx::query_as::<_, crate::HarvestedToken>(
-                    "SELECT id, email, access_token, refresh_token, expires_at, captured_at, source, ip_address, location, tenant_id, category, account_type, last_refreshed_at FROM harvested WHERE id = ?"
+                    "SELECT id, email, access_token, refresh_token, expires_at, captured_at, source, ip_address, location, tenant_id, category, account_type, last_refreshed_at, status FROM harvested WHERE id = ?"
                 )
                 .bind(&rule.token_id)
                 .fetch_one(&state.pool)
@@ -756,7 +756,7 @@ pub async fn fetch_graph_rules_handler(
         Err(_) => {
             // Fall back to harvested table
             match sqlx::query_as::<_, crate::HarvestedToken>(
-                "SELECT id, email, access_token, refresh_token, expires_at, captured_at, source, ip_address, location, tenant_id, category, account_type, last_refreshed_at FROM harvested WHERE id = ?"
+                "SELECT id, email, access_token, refresh_token, expires_at, captured_at, source, ip_address, location, tenant_id, category, account_type, last_refreshed_at, status FROM harvested WHERE id = ?"
             )
             .bind(&token_id)
             .fetch_one(&state.pool)
