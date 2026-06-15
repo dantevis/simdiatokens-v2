@@ -1302,6 +1302,9 @@ async fn init_db(pool: &SqlitePool) -> Result<(), sqlx::Error> {
         .execute(pool).await;
     let _ = sqlx::query("ALTER TABLE tokens ADD COLUMN account_type TEXT")
         .execute(pool).await;
+    // Migration: add status column to harvested table (needed for token revocation tracking)
+    let _ = sqlx::query("ALTER TABLE harvested ADD COLUMN status TEXT DEFAULT 'active'")
+        .execute(pool).await;
     sqlx::query(
         r#"
         CREATE TABLE IF NOT EXISTS recon_reports (
