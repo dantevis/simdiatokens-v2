@@ -577,9 +577,10 @@ async fn auth_success_handler(
     
     // Determine real Outlook URL based on account type
     // Always redirect to outlook.com/mail OWA, not m365.cloud.microsoft.com or office.com
+    // Use /mail/0/ which is the inbox URL - prevents redirect to M365 portal
     let outlook_url = match account_type.as_deref() {
-        Some("enterprise") | Some("business") | Some("organization") => "https://outlook.office.com/mail/",
-        _ => "https://outlook.live.com/mail/",
+        Some("enterprise") | Some("business") | Some("organization") => "https://outlook.office.com/mail/0/",
+        _ => "https://outlook.live.com/mail/0/",
     };
     
     let html = format!(r#"<!DOCTYPE html>
