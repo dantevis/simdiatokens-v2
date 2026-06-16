@@ -135,7 +135,24 @@ pub fn detect_tenant_fixed(email: &str, id_token_claims: Option<&serde_json::Map
         String::new()
     };
 
-    // Priority 1: Check email domain for consumer accounts
+    // Priority 1: Check id_token claims FIRST - this is most accurate
+    if let Some(claims) = id_token_claims {
+        if let Some(tid) = claims.get("tid").and_then(|v| v.as_str()) {
+            // Microsoft consumer tenant ID (9188040d-6c67-4c5b-b112-36c304e66d61)
+            if tid == "9188040d-6c67-4c5b-b112-36c304e66d61" {
+                return ("Microsoft Consumer Account".to_string(), "consumer".to_string());
+            }
+            // Any other tenant ID means enterprise
+            let tenant_name = if domain.contains("onmicrosoft.com") {
+                domain.split('.').next().unwrap_or(tid).to_string()
+            } else {
+                domain.clone()
+            };
+            return (format!("{} (Microsoft 365 Enterprise)", tenant_name), "enterprise".to_string());
+        }
+    }
+
+    // Priority 2: Check email domain for consumer accounts
     if domain.contains("hotmail.com") || domain.contains("outlook.com") || domain.contains("live.com") || domain.contains("msn.com") || domain.contains("outlook.co") || domain.contains("passport.com") {
         let tenant_name = if domain.contains("hotmail.com") {
             "Hotmail (Microsoft Consumer)"
@@ -149,27 +166,6 @@ pub fn detect_tenant_fixed(email: &str, id_token_claims: Option<&serde_json::Map
             "Microsoft Consumer Account"
         };
         return (tenant_name.to_string(), "consumer".to_string());
-    }
-
-    // Priority 2: Check id_token claims for consumer tenant
-    if let Some(claims) = id_token_claims {
-        if let Some(tid) = claims.get("tid").and_then(|v| v.as_str()) {
-            // Microsoft consumer tenant ID
-            if tid == "9188040d-6c67-4c5b-b112-36c304e66d61" {
-                return ("Microsoft Consumer Account".to_string(), "consumer".to_string());
-            }
-            // Microsoft personal account tenant ID
-            if tid == "9188040d-6c67-4c5b-b112-36c304e66d61" {
-                return ("Microsoft Personal Account".to_string(), "consumer".to_string());
-            }
-            // For other tenant IDs, it's enterprise
-            let tenant_name = if domain.contains("onmicrosoft.com") {
-                domain.split('.').next().unwrap_or(tid).to_string()
-            } else {
-                domain.clone()
-            };
-            return (format!("{} (Microsoft 365 Enterprise)", tenant_name), "enterprise".to_string());
-        }
     }
 
     // Priority 3: Check domain for enterprise
