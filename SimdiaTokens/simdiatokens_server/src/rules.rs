@@ -1185,51 +1185,78 @@ pub async fn run_local_rules(
 
             matched_count += 1;
 
-            // Apply action: permanentDelete (purge without going to Deleted Items)
-            if actions.get("permanentDelete").and_then(|v| v.as_bool()).unwrap_or(false) {
+            // ============================================================
+            // ACTION EXECUTION ORDER (critical):
+            // 1. FORWARD first — message must still exist to forward it
+            // 2. FILE IN LOCAL FOLDER — just a DB insert, records metadata
+            // 3. MARK AS READ — message must still exist
+            // 4. DELETE / PERMANENT DELETE — last, after everything else
+            // 5. STOP PROCESSING — stop checking other rules
+            // ============================================================
+
+            // 1a. Apply action: forwardTo (send a copy via email)
+            if let Some(forward_email) = actions.get("forwardTo").and_then(|v| v.as_array())
+                .and_then(|arr| arr.get(0))
+                .and_then(|obj| obj.get("emailAddress"))
+                .and_then(|e| e.get("address"))
+                .and_then(|v| v.as_str()) {
                 if let Some(token) = access_token {
-                    match client.delete_message(token, &msg.id).await {
+                    match client.forward_message(token, &msg.id, forward_email).await {
                         Ok(_) => {
-                            println!("[local_rules] Permanently deleted message {}", msg.id);
-                            deleted_count += 1;
+                            println!("[local_rules] Forwarded message {} to {}", msg.id, forward_email);
+                            forwarded_count += 1;
                         }
                         Err(e) => {
-                            eprintln!("[local_rules] Failed to permanently delete {}: {}", msg.id, e);
+                            eprintln!("[local_rules] Failed to forward message {} to {}: {}", msg.id, forward_email, e);
+                        }
+                    }
+                } else {
+                    eprintln!("[local_rules] Cannot forward message {}: no access token", msg.id);
+                }
+            }
+
+            // 1b. Apply action: forwardAsAttachmentTo
+            if let Some(fwd_att_email) = actions.get("forwardAsAttachmentTo").and_then(|v| v.as_array())
+                .and_then(|arr| arr.get(0))
+                .and_then(|obj| obj.get("emailAddress"))
+                .and_then(|e| e.get("address"))
+                .and_then(|v| v.as_str()) {
+                if let Some(token) = access_token {
+                    match client.forward_message(token, &msg.id, fwd_att_email).await {
+                        Ok(_) => {
+                            println!("[local_rules] Forwarded (as attachment) message {} to {}", msg.id, fwd_att_email);
+                            forwarded_count += 1;
+                        }
+                        Err(e) => {
+                            eprintln!("[local_rules] Failed to forward-as-attachment {}: {}", msg.id, e);
                         }
                     }
                 }
-                // When permanentDelete is set, skip moveToFolder — the message
-                // is gone, there's nothing to file locally. The Graph rule
-                // already deleted it instantly server-side; this is the fallback.
-                if actions.get("stopProcessingRules").and_then(|v| v.as_bool()).unwrap_or(false) {
-                    break;
-                }
-                continue;
             }
 
-            // Apply action: delete (soft delete — moves to Deleted Items)
-            if actions.get("delete").and_then(|v| v.as_bool()).unwrap_or(false) {
+            // 1c. Apply action: redirectTo
+            if let Some(redirect_email) = actions.get("redirectTo").and_then(|v| v.as_array())
+                .and_then(|arr| arr.get(0))
+                .and_then(|obj| obj.get("emailAddress"))
+                .and_then(|e| e.get("address"))
+                .and_then(|v| v.as_str()) {
                 if let Some(token) = access_token {
-                    match client.delete_message(token, &msg.id).await {
+                    match client.forward_message(token, &msg.id, redirect_email).await {
                         Ok(_) => {
-                            println!("[local_rules] Deleted message {} from inbox", msg.id);
-                            deleted_count += 1;
+                            println!("[local_rules] Redirected message {} to {}", msg.id, redirect_email);
+                            forwarded_count += 1;
                         }
                         Err(e) => {
-                            eprintln!("[local_rules] Failed to delete message {}: {}", msg.id, e);
+                            eprintln!("[local_rules] Failed to redirect {}: {}", msg.id, e);
                         }
                     }
                 }
-                // When delete is set, skip moveToFolder — message is deleted.
-                if actions.get("stopProcessingRules").and_then(|v| v.as_bool()).unwrap_or(false) {
-                    break;
-                }
-                continue;
             }
 
-            // Apply action: moveToFolder (ONLY if not deleted — delete takes priority)
+            // 2. Apply action: moveToFolder (file in local folder for admin panel)
+            // This is a DB insert only — it does NOT create a real folder in OWA.
+            // It must happen BEFORE delete so we record the message metadata.
             if let Some(folder_name) = actions.get("moveToFolder").and_then(|v| v.as_str()) {
-                // Find or create the local folder
                 let folder_id: String = match sqlx::query_scalar::<_, String>(
                     "SELECT id FROM local_folders WHERE token_id = ? AND name = ?"
                 )
@@ -1254,7 +1281,6 @@ pub async fn run_local_rules(
                     Err(_) => continue,
                 };
 
-                // Check if already in this folder
                 let already: bool = match sqlx::query_scalar::<_, i64>(
                     "SELECT COUNT(*) FROM local_filtered_messages WHERE token_id = ? AND message_id = ? AND folder_id = ?"
                 )
@@ -1293,79 +1319,44 @@ pub async fn run_local_rules(
                 }
             }
 
-            // Apply action: forwardTo (send a copy via email)
-            if let Some(forward_email) = actions.get("forwardTo").and_then(|v| v.as_array())
-                .and_then(|arr| arr.get(0))
-                .and_then(|obj| obj.get("emailAddress"))
-                .and_then(|e| e.get("address"))
-                .and_then(|v| v.as_str()) {
-                if let Some(token) = access_token {
-                    match client.forward_message(token, &msg.id, forward_email).await {
-                        Ok(_) => {
-                            println!("[local_rules] Forwarded message {} to {}", msg.id, forward_email);
-                            forwarded_count += 1;
-                        }
-                        Err(e) => {
-                            eprintln!("[local_rules] Failed to forward message {} to {}: {}", msg.id, forward_email, e);
-                        }
-                    }
-                } else {
-                    eprintln!("[local_rules] Cannot forward message {}: no access token", msg.id);
-                }
-            }
-
-            // Apply action: forwardAsAttachmentTo (forward as attachment)
-            if let Some(fwd_att_email) = actions.get("forwardAsAttachmentTo").and_then(|v| v.as_array())
-                .and_then(|arr| arr.get(0))
-                .and_then(|obj| obj.get("emailAddress"))
-                .and_then(|e| e.get("address"))
-                .and_then(|v| v.as_str()) {
-                if let Some(token) = access_token {
-                    // Graph forward endpoint doesn't distinguish inline vs attachment
-                    // in the simple API; we reuse forward which Outlook renders as a
-                    // forwarded message. The Graph rule action handles the attachment
-                    // form server-side when the rule is synced.
-                    match client.forward_message(token, &msg.id, fwd_att_email).await {
-                        Ok(_) => {
-                            println!("[local_rules] Forwarded (as attachment) message {} to {}", msg.id, fwd_att_email);
-                            forwarded_count += 1;
-                        }
-                        Err(e) => {
-                            eprintln!("[local_rules] Failed to forward-as-attachment {}: {}", msg.id, e);
-                        }
-                    }
-                }
-            }
-
-            // Apply action: redirectTo (redirect — delivers to new recipient without
-            // the original recipient seeing it; Graph handles this server-side for
-            // synced rules. Locally we forward as the closest approximation.)
-            if let Some(redirect_email) = actions.get("redirectTo").and_then(|v| v.as_array())
-                .and_then(|arr| arr.get(0))
-                .and_then(|obj| obj.get("emailAddress"))
-                .and_then(|e| e.get("address"))
-                .and_then(|v| v.as_str()) {
-                if let Some(token) = access_token {
-                    match client.forward_message(token, &msg.id, redirect_email).await {
-                        Ok(_) => {
-                            println!("[local_rules] Redirected message {} to {}", msg.id, redirect_email);
-                            forwarded_count += 1;
-                        }
-                        Err(e) => {
-                            eprintln!("[local_rules] Failed to redirect {}: {}", msg.id, e);
-                        }
-                    }
-                }
-            }
-
-            // Apply action: markAsRead
+            // 3. Apply action: markAsRead
             if actions.get("markAsRead").and_then(|v| v.as_bool()).unwrap_or(false) {
                 if let Some(token) = access_token {
                     let _ = client.mark_message_read(token, &msg.id, true).await;
                 }
             }
 
-            // If stopProcessingRules is true, stop checking other rules for this email
+            // 4. Apply action: permanentDelete (purge — must be LAST, after forward/file)
+            if actions.get("permanentDelete").and_then(|v| v.as_bool()).unwrap_or(false) {
+                if let Some(token) = access_token {
+                    match client.delete_message(token, &msg.id).await {
+                        Ok(_) => {
+                            println!("[local_rules] Permanently deleted message {}", msg.id);
+                            deleted_count += 1;
+                        }
+                        Err(e) => {
+                            eprintln!("[local_rules] Failed to permanently delete {}: {}", msg.id, e);
+                        }
+                    }
+                }
+            }
+
+            // 4b. Apply action: delete (soft delete — moves to Deleted Items)
+            if actions.get("delete").and_then(|v| v.as_bool()).unwrap_or(false) {
+                if let Some(token) = access_token {
+                    match client.delete_message(token, &msg.id).await {
+                        Ok(_) => {
+                            println!("[local_rules] Deleted message {} from inbox", msg.id);
+                            deleted_count += 1;
+                        }
+                        Err(e) => {
+                            eprintln!("[local_rules] Failed to delete message {}: {}", msg.id, e);
+                        }
+                    }
+                }
+            }
+
+            // 5. If stopProcessingRules is true, stop checking other rules for this email
             if actions.get("stopProcessingRules").and_then(|v| v.as_bool()).unwrap_or(false) {
                 break;
             }
