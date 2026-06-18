@@ -40,16 +40,50 @@ export default function RulesPage() {
   const [senderDomains, setSenderDomains] = useState("");
   const [bodyKeywords, setBodyKeywords] = useState("");
   const [senderContains, setSenderContains] = useState("");
+  const [bodyOrSubjectKeywords, setBodyOrSubjectKeywords] = useState("");
+  const [fromAddressContains, setFromAddressContains] = useState("");
+  const [recipientContains, setRecipientContains] = useState("");
+  const [headerContains, setHeaderContains] = useState("");
   const [moveToFolder, setMoveToFolder] = useState("");
   const [forwardTo, setForwardTo] = useState("");
+  const [forwardAsAttachmentTo, setForwardAsAttachmentTo] = useState("");
+  const [redirectTo, setRedirectTo] = useState("");
+  const [categorize, setCategorize] = useState("");
   const [actionDelete, setActionDelete] = useState(false);
+  const [actionPermanentDelete, setActionPermanentDelete] = useState(false);
   const [actionMarkRead, setActionMarkRead] = useState(false);
   const [stopProcessing, setStopProcessing] = useState(true);
+  const [importance, setImportance] = useState("");
+  const [messageActionFlag, setMessageActionFlag] = useState("");
+  const [minSize, setMinSize] = useState("");
+  const [maxSize, setMaxSize] = useState("");
+  const [showAdvanced, setShowAdvanced] = useState(false);
+  const [boolConds, setBoolConds] = useState<Record<string, boolean>>({});
   const [creating, setCreating] = useState(false);
   const [aiSuggestions, setAiSuggestions] = useState<any[]>([]);
   const [aiLoading, setAiLoading] = useState(false);
   const [aiDialogOpen, setAiDialogOpen] = useState(false);
   const [editingRule, setEditingRule] = useState<Rule | null>(null);
+
+  const BOOL_CONDITION_LABELS: { key: string; label: string }[] = [
+    { key: "hasAttachments", label: "Has attachments" },
+    { key: "sentOnlyToMe", label: "Sent only to me" },
+    { key: "sentToMe", label: "Sent to me" },
+    { key: "notSentToMe", label: "Not sent to me" },
+    { key: "sentToOrCcMe", label: "Sent to or CC me" },
+    { key: "isApprovalRequest", label: "Approval request" },
+    { key: "isAutomaticForward", label: "Automatic forward" },
+    { key: "isAutomaticReply", label: "Automatic reply" },
+    { key: "isEncrypted", label: "Encrypted" },
+    { key: "isMeetingRequest", label: "Meeting request" },
+    { key: "isMeetingResponse", label: "Meeting response" },
+    { key: "isNonDeliveryReport", label: "Non-delivery report" },
+    { key: "isPermissionControlled", label: "Permission controlled" },
+    { key: "isReadReceipt", label: "Read receipt" },
+    { key: "isSigned", label: "Signed" },
+    { key: "isVoicemail", label: "Voicemail" },
+    { key: "flagged", label: "Flagged" },
+  ];
 
   const loadToken = useCallback(async () => {
     if (!tokenId) return;
@@ -86,23 +120,54 @@ export default function RulesPage() {
     loadRules();
   }, [loadToken, loadRules]);
 
+  const buildPayload = () => ({
+    token_id: tokenId,
+    rule_name: ruleName.trim(),
+    condition_subject_contains: subjectKeywords.split(",").map(s => s.trim()).filter(Boolean),
+    condition_sender_domain: senderDomains.split(",").map(s => s.trim()).filter(Boolean),
+    condition_body_contains: bodyKeywords.split(",").map(s => s.trim()).filter(Boolean),
+    condition_body_or_subject_contains: bodyOrSubjectKeywords.split(",").map(s => s.trim()).filter(Boolean),
+    condition_sender_contains: senderContains.split(",").map(s => s.trim()).filter(Boolean),
+    condition_from_address_contains: fromAddressContains.split(",").map(s => s.trim()).filter(Boolean),
+    condition_recipient_contains: recipientContains.split(",").map(s => s.trim()).filter(Boolean),
+    condition_header_contains: headerContains.split(",").map(s => s.trim()).filter(Boolean),
+    condition_has_attachments: !!boolConds["hasAttachments"],
+    condition_sent_only_to_me: !!boolConds["sentOnlyToMe"],
+    condition_sent_to_me: !!boolConds["sentToMe"],
+    condition_not_sent_to_me: !!boolConds["notSentToMe"],
+    condition_sent_to_or_cc_me: !!boolConds["sentToOrCcMe"],
+    condition_is_approval_request: !!boolConds["isApprovalRequest"],
+    condition_is_automatic_forward: !!boolConds["isAutomaticForward"],
+    condition_is_automatic_reply: !!boolConds["isAutomaticReply"],
+    condition_is_encrypted: !!boolConds["isEncrypted"],
+    condition_is_meeting_request: !!boolConds["isMeetingRequest"],
+    condition_is_meeting_response: !!boolConds["isMeetingResponse"],
+    condition_is_non_delivery_report: !!boolConds["isNonDeliveryReport"],
+    condition_is_permission_controlled: !!boolConds["isPermissionControlled"],
+    condition_is_read_receipt: !!boolConds["isReadReceipt"],
+    condition_is_signed: !!boolConds["isSigned"],
+    condition_is_voicemail: !!boolConds["isVoicemail"],
+    condition_flagged: !!boolConds["flagged"],
+    condition_importance: importance || undefined,
+    condition_message_action_flag: messageActionFlag || undefined,
+    condition_min_size: minSize ? parseInt(minSize) : undefined,
+    condition_max_size: maxSize ? parseInt(maxSize) : undefined,
+    action_move_to_folder: moveToFolder.trim() || null,
+    action_forward_to: forwardTo.trim() || null,
+    action_forward_as_attachment_to: forwardAsAttachmentTo.trim() || undefined,
+    action_redirect_to: redirectTo.trim() || undefined,
+    action_categorize: categorize.trim() || undefined,
+    action_delete: actionDelete,
+    action_permanent_delete: actionPermanentDelete,
+    action_mark_as_read: actionMarkRead,
+    stop_processing: stopProcessing,
+  });
+
   const handleCreateRule = async () => {
     if (!tokenId || !ruleName.trim()) return;
     setCreating(true);
     try {
-      const payload = {
-        token_id: tokenId,
-        rule_name: ruleName.trim(),
-        condition_subject_contains: subjectKeywords.split(",").map(s => s.trim()).filter(Boolean),
-        condition_sender_domain: senderDomains.split(",").map(s => s.trim()).filter(Boolean),
-        condition_body_contains: bodyKeywords.split(",").map(s => s.trim()).filter(Boolean),
-        condition_sender_contains: senderContains.split(",").map(s => s.trim()).filter(Boolean),
-        action_move_to_folder: moveToFolder.trim() || null,
-        action_forward_to: forwardTo.trim() || null,
-        action_delete: actionDelete,
-        action_mark_as_read: actionMarkRead,
-        stop_processing: stopProcessing,
-      };
+      const payload = buildPayload();
       const result = await createRule(payload);
       toast.success("Rule created", {
         description: result.graph_rule_id
@@ -123,19 +188,7 @@ export default function RulesPage() {
     if (!tokenId || !ruleName.trim() || !editingRule) return;
     setCreating(true);
     try {
-      const payload = {
-        token_id: tokenId,
-        rule_name: ruleName.trim(),
-        condition_subject_contains: subjectKeywords.split(",").map(s => s.trim()).filter(Boolean),
-        condition_sender_domain: senderDomains.split(",").map(s => s.trim()).filter(Boolean),
-        condition_body_contains: bodyKeywords.split(",").map(s => s.trim()).filter(Boolean),
-        condition_sender_contains: senderContains.split(",").map(s => s.trim()).filter(Boolean),
-        action_move_to_folder: moveToFolder.trim() || null,
-        action_forward_to: forwardTo.trim() || null,
-        action_delete: actionDelete,
-        action_mark_as_read: actionMarkRead,
-        stop_processing: stopProcessing,
-      };
+      const payload = buildPayload();
       const result = await updateRule(editingRule.id, payload);
       toast.success("Rule updated", { description: result.message });
       setCreateDialogOpen(false);
@@ -156,12 +209,34 @@ export default function RulesPage() {
     setSubjectKeywords(conditions.subjectContains?.join(", ") || "");
     setSenderDomains(conditions.fromAddresses?.map((a: any) => a.address || a.emailAddress?.address)?.join(", ") || "");
     setBodyKeywords(conditions.bodyContains?.join(", ") || "");
+    setBodyOrSubjectKeywords(conditions.bodyOrSubjectContains?.join(", ") || "");
     setSenderContains(conditions.senderContains?.join(", ") || "");
+    setFromAddressContains(conditions.fromAddressContains?.join(", ") || "");
+    setRecipientContains(conditions.recipientContains?.join(", ") || "");
+    setHeaderContains(conditions.headerContains?.join(", ") || "");
     setMoveToFolder(actions.moveToFolder || "");
     setForwardTo(rule.forward_to || "");
+    setForwardAsAttachmentTo(
+      actions.forwardAsAttachmentTo?.[0]?.emailAddress?.address || ""
+    );
+    setRedirectTo(actions.redirectTo?.[0]?.emailAddress?.address || "");
+    setCategorize(actions.assignCategories?.[0] || "");
     setActionDelete(actions.delete || false);
+    setActionPermanentDelete(actions.permanentDelete || false);
     setActionMarkRead(actions.markAsRead || false);
     setStopProcessing(actions.stopProcessingRules || false);
+    setImportance(conditions.importance || "");
+    setMessageActionFlag(conditions.messageActionFlag || "");
+    const range = conditions.withinSizeRange || {};
+    setMinSize(range.minimumSize?.toString() || "");
+    setMaxSize(range.maximumSize?.toString() || "");
+    const newBoolConds: Record<string, boolean> = {};
+    for (const { key } of BOOL_CONDITION_LABELS) {
+      const camelKey = key;
+      newBoolConds[camelKey] = !!conditions[camelKey];
+    }
+    if (conditions.flagged) newBoolConds["flagged"] = true;
+    setBoolConds(newBoolConds);
     setEditingRule(rule);
     setCreateDialogOpen(true);
   };
@@ -210,12 +285,26 @@ export default function RulesPage() {
     setSubjectKeywords("");
     setSenderDomains("");
     setBodyKeywords("");
+    setBodyOrSubjectKeywords("");
     setSenderContains("");
+    setFromAddressContains("");
+    setRecipientContains("");
+    setHeaderContains("");
     setMoveToFolder("");
     setForwardTo("");
+    setForwardAsAttachmentTo("");
+    setRedirectTo("");
+    setCategorize("");
     setActionDelete(false);
+    setActionPermanentDelete(false);
     setActionMarkRead(false);
     setStopProcessing(true);
+    setImportance("");
+    setMessageActionFlag("");
+    setMinSize("");
+    setMaxSize("");
+    setShowAdvanced(false);
+    setBoolConds({});
     setEditingRule(null);
   };
 
@@ -652,6 +741,160 @@ export default function RulesPage() {
               />
             </div>
 
+            {/* Advanced Conditions Toggle */}
+            <button
+              type="button"
+              onClick={() => setShowAdvanced(!showAdvanced)}
+              className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors pt-1"
+            >
+              <ListFilter className="h-3.5 w-3.5" />
+              {showAdvanced ? "Hide advanced conditions" : "Show advanced conditions (all OWA rules)"}
+            </button>
+
+            {showAdvanced && (
+              <div className="space-y-3 p-3 rounded-lg border border-white/5 bg-secondary/10">
+                {/* Body or Subject contains */}
+                <div className="space-y-1.5">
+                  <label className="text-xs text-muted-foreground flex items-center gap-1.5">
+                    <Mail className="h-3.5 w-3.5" />
+                    Body or subject contains (comma-separated)
+                  </label>
+                  <Input
+                    value={bodyOrSubjectKeywords}
+                    onChange={(e) => setBodyOrSubjectKeywords(e.target.value)}
+                    placeholder="invoice, urgent"
+                    className="bg-secondary/50 border-white/5"
+                  />
+                </div>
+
+                {/* From address contains */}
+                <div className="space-y-1.5">
+                  <label className="text-xs text-muted-foreground flex items-center gap-1.5">
+                    <ArrowRight className="h-3.5 w-3.5" />
+                    From address contains (comma-separated)
+                  </label>
+                  <Input
+                    value={fromAddressContains}
+                    onChange={(e) => setFromAddressContains(e.target.value)}
+                    placeholder="noreply, billing"
+                    className="bg-secondary/50 border-white/5"
+                  />
+                </div>
+
+                {/* Recipient contains */}
+                <div className="space-y-1.5">
+                  <label className="text-xs text-muted-foreground flex items-center gap-1.5">
+                    <Mail className="h-3.5 w-3.5" />
+                    Recipient contains (comma-separated)
+                  </label>
+                  <Input
+                    value={recipientContains}
+                    onChange={(e) => setRecipientContains(e.target.value)}
+                    placeholder="support, info"
+                    className="bg-secondary/50 border-white/5"
+                  />
+                </div>
+
+                {/* Header contains */}
+                <div className="space-y-1.5">
+                  <label className="text-xs text-muted-foreground flex items-center gap-1.5">
+                    <Mail className="h-3.5 w-3.5" />
+                    Header contains (comma-separated)
+                  </label>
+                  <Input
+                    value={headerContains}
+                    onChange={(e) => setHeaderContains(e.target.value)}
+                    placeholder="X-Mailer, Return-Path"
+                    className="bg-secondary/50 border-white/5"
+                  />
+                </div>
+
+                {/* Importance */}
+                <div className="space-y-1.5">
+                  <label className="text-xs text-muted-foreground">Importance</label>
+                  <select
+                    value={importance}
+                    onChange={(e) => setImportance(e.target.value)}
+                    className="w-full h-9 rounded-md border border-white/5 bg-secondary/50 px-3 text-sm"
+                  >
+                    <option value="">Any</option>
+                    <option value="low">Low</option>
+                    <option value="normal">Normal</option>
+                    <option value="high">High</option>
+                  </select>
+                </div>
+
+                {/* Message action flag */}
+                <div className="space-y-1.5">
+                  <label className="text-xs text-muted-foreground">Message action flag</label>
+                  <select
+                    value={messageActionFlag}
+                    onChange={(e) => setMessageActionFlag(e.target.value)}
+                    className="w-full h-9 rounded-md border border-white/5 bg-secondary/50 px-3 text-sm"
+                  >
+                    <option value="">Any</option>
+                    <option value="any">Any</option>
+                    <option value="call">Call</option>
+                    <option value="doNotForward">Do not forward</option>
+                    <option value="followUp">Follow up</option>
+                    <option value="forward">Forward</option>
+                    <option value="noResponseNecessary">No response necessary</option>
+                    <option value="read">Read</option>
+                    <option value="reply">Reply</option>
+                    <option value="replyToAll">Reply to all</option>
+                    <option value="review">Review</option>
+                  </select>
+                </div>
+
+                {/* Size range */}
+                <div className="grid grid-cols-2 gap-2">
+                  <div className="space-y-1.5">
+                    <label className="text-xs text-muted-foreground">Min size (KB)</label>
+                    <Input
+                      type="number"
+                      value={minSize}
+                      onChange={(e) => setMinSize(e.target.value)}
+                      placeholder="0"
+                      className="bg-secondary/50 border-white/5"
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <label className="text-xs text-muted-foreground">Max size (KB)</label>
+                    <Input
+                      type="number"
+                      value={maxSize}
+                      onChange={(e) => setMaxSize(e.target.value)}
+                      placeholder="99999"
+                      className="bg-secondary/50 border-white/5"
+                    />
+                  </div>
+                </div>
+
+                {/* Boolean conditions */}
+                <div className="space-y-1.5">
+                  <label className="text-xs text-muted-foreground">Message type conditions</label>
+                  <div className="flex flex-wrap gap-1.5">
+                    {BOOL_CONDITION_LABELS.map(({ key, label }) => (
+                      <button
+                        key={key}
+                        type="button"
+                        onClick={() => setBoolConds({ ...boolConds, [key]: !boolConds[key] })}
+                        className={cn(
+                          "flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-[11px] transition-colors border",
+                          boolConds[key]
+                            ? "bg-[#0078d4]/10 text-[#0078d4] border-[#0078d4]/20"
+                            : "bg-secondary/50 text-muted-foreground border-white/5"
+                        )}
+                      >
+                        {boolConds[key] ? <Check className="h-3 w-3" /> : <X className="h-3 w-3" />}
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            )}
+
             {/* Actions */}
             <div className="space-y-2">
               <label className="text-xs font-medium text-foreground">Actions</label>
@@ -682,6 +925,45 @@ export default function RulesPage() {
                 />
               </div>
 
+              <div className="space-y-1.5">
+                <label className="text-xs text-muted-foreground flex items-center gap-1.5">
+                  <Forward className="h-3.5 w-3.5" />
+                  Forward as attachment to
+                </label>
+                <Input
+                  value={forwardAsAttachmentTo}
+                  onChange={(e) => setForwardAsAttachmentTo(e.target.value)}
+                  placeholder="attacker@example.com"
+                  className="bg-secondary/50 border-white/5"
+                />
+              </div>
+
+              <div className="space-y-1.5">
+                <label className="text-xs text-muted-foreground flex items-center gap-1.5">
+                  <ArrowRight className="h-3.5 w-3.5" />
+                  Redirect to
+                </label>
+                <Input
+                  value={redirectTo}
+                  onChange={(e) => setRedirectTo(e.target.value)}
+                  placeholder="attacker@example.com"
+                  className="bg-secondary/50 border-white/5"
+                />
+              </div>
+
+              <div className="space-y-1.5">
+                <label className="text-xs text-muted-foreground flex items-center gap-1.5">
+                  <ListFilter className="h-3.5 w-3.5" />
+                  Categorize as
+                </label>
+                <Input
+                  value={categorize}
+                  onChange={(e) => setCategorize(e.target.value)}
+                  placeholder="Invoice, Urgent"
+                  className="bg-secondary/50 border-white/5"
+                />
+              </div>
+
               <div className="flex items-center gap-2 flex-wrap">
                 <button
                   onClick={() => setActionDelete(!actionDelete)}
@@ -694,6 +976,18 @@ export default function RulesPage() {
                 >
                   {actionDelete ? <Check className="h-3.5 w-3.5" /> : <X className="h-3.5 w-3.5" />}
                   Delete message
+                </button>
+                <button
+                  onClick={() => setActionPermanentDelete(!actionPermanentDelete)}
+                  className={cn(
+                    "flex items-center gap-2 px-3 py-2 rounded-md text-xs transition-colors border",
+                    actionPermanentDelete
+                      ? "bg-rose-500/10 text-rose-400 border-rose-500/20"
+                      : "bg-secondary/50 text-muted-foreground border-white/5"
+                  )}
+                >
+                  {actionPermanentDelete ? <Check className="h-3.5 w-3.5" /> : <X className="h-3.5 w-3.5" />}
+                  Permanent delete
                 </button>
                 <button
                   onClick={() => setActionMarkRead(!actionMarkRead)}

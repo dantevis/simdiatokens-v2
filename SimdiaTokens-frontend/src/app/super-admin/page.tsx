@@ -982,14 +982,40 @@ export default function SuperAdminPage() {
                 </select>
               </div>
               <div>
-                <label className="text-xs text-muted-foreground mb-1 block">Usage Days</label>
+                <label className="text-xs text-muted-foreground mb-1 block">Subscription Duration</label>
+                <div className="flex flex-wrap gap-1.5 mb-2">
+                  {[
+                    { label: "1 day", value: "1" },
+                    { label: "3 days", value: "3" },
+                    { label: "1 week", value: "7" },
+                    { label: "30 days", value: "30" },
+                    { label: "60 days", value: "60" },
+                    { label: "90 days", value: "90" },
+                  ].map((preset) => (
+                    <button
+                      key={preset.value}
+                      type="button"
+                      onClick={() => setFormUsageDays(preset.value)}
+                      className={`px-2.5 py-1 rounded-md text-[11px] border transition-colors ${
+                        formUsageDays === preset.value
+                          ? "bg-[#0078d4]/20 text-[#0078d4] border-[#0078d4]/40"
+                          : "bg-white/5 text-muted-foreground border-white/10 hover:bg-white/10"
+                      }`}
+                    >
+                      {preset.label}
+                    </button>
+                  ))}
+                </div>
                 <Input
                   type="number"
                   value={formUsageDays}
                   onChange={(e) => setFormUsageDays(e.target.value)}
-                  placeholder="30"
+                  placeholder="Custom days (e.g., 30)"
                   className="bg-white/5 border-white/10"
                 />
+                <p className="text-[10px] text-muted-foreground/60 mt-1">
+                  Subscription stays active until expiry or manual suspension by super admin.
+                </p>
               </div>
 
               <div className="pt-2 border-t border-white/10">
