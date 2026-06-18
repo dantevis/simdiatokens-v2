@@ -23,13 +23,20 @@ import {
   ExternalLink,
   Calendar,
   Key,
+  Activity,
+  BarChart3,
+  Folder,
+  Gavel,
+  Link2,
+  Eye,
+  X,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { toast } from "sonner";
 import { fetchAdmins, createAdmin, updateAdmin, deleteAdmin } from "@/lib/api";
-import { loginUser } from "@/lib/utils";
+import { loginUser, fetchAnalyticsOverview } from "@/lib/utils";
 
 interface Admin {
   id: string;
@@ -54,6 +61,9 @@ export default function SuperAdminPage() {
   const [createOpen, setCreateOpen] = useState(false);
   const [editingAdmin, setEditingAdmin] = useState<Admin | null>(null);
   const [configuringAdmin, setConfiguringAdmin] = useState<Admin | null>(null);
+  const [selectedAdmin, setSelectedAdmin] = useState<Admin | null>(null);
+  const [activityData, setActivityData] = useState<any>(null);
+  const [activityLoading, setActivityLoading] = useState(false);
 
   // Super admin login state
   const [isLoggedIn, setIsLoggedIn] = useState(false);
@@ -231,6 +241,20 @@ export default function SuperAdminPage() {
     setFormApiUrl(admin.api_url || "");
     setFormFrontendUrl(admin.frontend_url || "");
     setFormWorkerUrl(admin.worker_url || "");
+  };
+
+  const openDetail = async (admin: Admin) => {
+    setSelectedAdmin(admin);
+    setActivityLoading(true);
+    try {
+      const data = await fetchAnalyticsOverview();
+      setActivityData(data);
+    } catch (err: any) {
+      console.warn("Failed to load activity:", err?.message);
+      setActivityData(null);
+    } finally {
+      setActivityLoading(false);
+    }
   };
 
   const handleConfigure = async () => {
@@ -427,13 +451,21 @@ export default function SuperAdminPage() {
 
       {/* Deployments List */}
       <div className="space-y-3">
+        {admins.length === 0 && !loading && (
+          <div className="p-8 rounded-xl border border-dashed border-white/10 text-center">
+            <Shield className="h-8 w-8 text-muted-foreground/30 mx-auto mb-2" />
+            <p className="text-sm text-muted-foreground">No deployments yet</p>
+            <p className="text-xs text-muted-foreground/60 mt-1">Click "Create Deployment" to add an admin</p>
+          </div>
+        )}
         {admins.map((admin, index) => (
           <motion.div
             key={admin.id}
             initial={{ opacity: 0, y: 10 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ delay: index * 0.05 }}
-            className="p-4 rounded-xl border border-white/5 bg-[#0f0f23]/80 hover:bg-[#1a1a3e]/80 transition-colors"
+            onClick={() => openDetail(admin)}
+            className="p-4 rounded-xl border border-white/5 bg-[#0f0f23]/80 hover:bg-[#1a1a3e]/80 hover:border-[#0078d4]/30 transition-all cursor-pointer group"
           >
             <div className="flex items-start justify-between gap-4">
               <div className="flex-1 min-w-0">
@@ -444,6 +476,7 @@ export default function SuperAdminPage() {
                     <Badge className="bg-[#0078d4]/20 text-[#0078d4] border-[#0078d4]/30">Super Admin</Badge>
                   )}
                   {getStatusBadge(admin)}
+                  <Eye className="h-3.5 w-3.5 text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity" />
                 </div>
 
                 {/* Basic Info */}
@@ -523,7 +556,7 @@ export default function SuperAdminPage() {
               </div>
 
               {/* Actions */}
-              <div className="flex items-center gap-2 shrink-0">
+              <div className="flex items-center gap-2 shrink-0" onClick={(e) => e.stopPropagation()}>
                 <button
                   onClick={() => handleSuspend(admin)}
                   className={`p-2 rounded-lg border transition-colors ${
@@ -633,6 +666,262 @@ export default function SuperAdminPage() {
               <Button onClick={handleConfigure}>
                 Save Configuration
               </Button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Admin Detail Modal */}
+      {selectedAdmin && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
+          onClick={() => setSelectedAdmin(null)}
+        >
+          <div
+            className="bg-[#1a1a2e] border border-white/10 rounded-xl w-full max-w-2xl max-h-[90vh] overflow-auto"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Detail Header */}
+            <div className="sticky top-0 bg-[#1a1a2e] border-b border-white/10 p-6 flex items-start justify-between">
+              <div className="flex items-center gap-3">
+                <div className="h-12 w-12 rounded-xl bg-[#0078d4]/10 ring-1 ring-[#0078d4]/20 flex items-center justify-center flex-shrink-0">
+                  <Shield className="h-6 w-6 text-[#0078d4]" />
+                </div>
+                <div>
+                  <div className="flex items-center gap-2">
+                    <h2 className="text-xl font-bold">{selectedAdmin.username}</h2>
+                    {getStatusBadge(selectedAdmin)}
+                  </div>
+                  <p className="text-xs text-muted-foreground mt-0.5">{selectedAdmin.email || "No email"}</p>
+                </div>
+              </div>
+              <button
+                onClick={() => setSelectedAdmin(null)}
+                className="p-2 rounded-lg hover:bg-white/10 transition-colors"
+              >
+                <X className="h-5 w-5 text-muted-foreground" />
+              </button>
+            </div>
+
+            <div className="p-6 space-y-6">
+              {/* Status Banner */}
+              {getStatusMessage(selectedAdmin)}
+
+              {/* Identity Section */}
+              <div>
+                <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-3 flex items-center gap-1.5">
+                  <Key className="h-3.5 w-3.5" /> Admin Identity
+                </h3>
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="p-3 rounded-lg bg-white/5 border border-white/5">
+                    <p className="text-[10px] text-muted-foreground uppercase">Username</p>
+                    <p className="text-sm font-medium mt-0.5">{selectedAdmin.username}</p>
+                  </div>
+                  <div className="p-3 rounded-lg bg-white/5 border border-white/5">
+                    <p className="text-[10px] text-muted-foreground uppercase">Role</p>
+                    <p className="text-sm font-medium mt-0.5 capitalize">{selectedAdmin.role}</p>
+                  </div>
+                  <div className="p-3 rounded-lg bg-white/5 border border-white/5">
+                    <p className="text-[10px] text-muted-foreground uppercase">Email</p>
+                    <p className="text-sm font-medium mt-0.5">{selectedAdmin.email || "—"}</p>
+                  </div>
+                  <div className="p-3 rounded-lg bg-white/5 border border-white/5">
+                    <p className="text-[10px] text-muted-foreground uppercase">Created</p>
+                    <p className="text-sm font-medium mt-0.5">
+                      {new Date(selectedAdmin.created_at).toLocaleDateString()}
+                    </p>
+                  </div>
+                </div>
+              </div>
+
+              {/* Subscription Section */}
+              <div>
+                <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-3 flex items-center gap-1.5">
+                  <Clock className="h-3.5 w-3.5" /> Subscription
+                </h3>
+                <div className="grid grid-cols-3 gap-3">
+                  <div className="p-3 rounded-lg bg-white/5 border border-white/5">
+                    <p className="text-[10px] text-muted-foreground uppercase">Usage Days</p>
+                    <p className="text-sm font-medium mt-0.5">{selectedAdmin.usage_days || "—"}</p>
+                  </div>
+                  <div className="p-3 rounded-lg bg-white/5 border border-white/5">
+                    <p className="text-[10px] text-muted-foreground uppercase">Expires At</p>
+                    <p className="text-sm font-medium mt-0.5">
+                      {selectedAdmin.expires_at
+                        ? new Date(selectedAdmin.expires_at).toLocaleDateString()
+                        : "No expiry"}
+                    </p>
+                  </div>
+                  <div className="p-3 rounded-lg bg-white/5 border border-white/5">
+                    <p className="text-[10px] text-muted-foreground uppercase">Suspended</p>
+                    <p className={`text-sm font-medium mt-0.5 ${selectedAdmin.suspended ? "text-rose-400" : "text-emerald-400"}`}>
+                      {selectedAdmin.suspended ? "Yes" : "No"}
+                    </p>
+                  </div>
+                </div>
+              </div>
+
+              {/* Deployment URLs Section */}
+              <div>
+                <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-3 flex items-center gap-1.5">
+                  <Link2 className="h-3.5 w-3.5" /> Deployment URLs
+                </h3>
+                <div className="space-y-2">
+                  {selectedAdmin.frontend_url ? (
+                    <a href={selectedAdmin.frontend_url} target="_blank" rel="noopener noreferrer" className="flex items-center gap-2 p-3 rounded-lg bg-white/5 border border-white/5 hover:bg-[#0078d4]/10 hover:border-[#0078d4]/20 transition-colors">
+                      <Globe className="h-4 w-4 text-[#0078d4] flex-shrink-0" />
+                      <div className="flex-1 min-w-0">
+                        <p className="text-[10px] text-muted-foreground">Frontend (Vercel)</p>
+                        <p className="text-sm text-[#0078d4] truncate">{selectedAdmin.frontend_url}</p>
+                      </div>
+                      <ExternalLink className="h-3.5 w-3.5 text-muted-foreground flex-shrink-0" />
+                    </a>
+                  ) : (
+                    <div className="flex items-center gap-2 p-3 rounded-lg bg-amber-500/5 border border-amber-500/10">
+                      <Globe className="h-4 w-4 text-amber-400 flex-shrink-0" />
+                      <p className="text-xs text-amber-400">Frontend URL not configured</p>
+                    </div>
+                  )}
+                  {selectedAdmin.api_url ? (
+                    <a href={selectedAdmin.api_url} target="_blank" rel="noopener noreferrer" className="flex items-center gap-2 p-3 rounded-lg bg-white/5 border border-white/5 hover:bg-[#0078d4]/10 hover:border-[#0078d4]/20 transition-colors">
+                      <Server className="h-4 w-4 text-[#0078d4] flex-shrink-0" />
+                      <div className="flex-1 min-w-0">
+                        <p className="text-[10px] text-muted-foreground">API (Railway)</p>
+                        <p className="text-sm text-[#0078d4] truncate">{selectedAdmin.api_url}</p>
+                      </div>
+                      <ExternalLink className="h-3.5 w-3.5 text-muted-foreground flex-shrink-0" />
+                    </a>
+                  ) : (
+                    <div className="flex items-center gap-2 p-3 rounded-lg bg-amber-500/5 border border-amber-500/10">
+                      <Server className="h-4 w-4 text-amber-400 flex-shrink-0" />
+                      <p className="text-xs text-amber-400">API URL not configured</p>
+                    </div>
+                  )}
+                  {selectedAdmin.worker_url ? (
+                    <a href={selectedAdmin.worker_url} target="_blank" rel="noopener noreferrer" className="flex items-center gap-2 p-3 rounded-lg bg-white/5 border border-white/5 hover:bg-[#0078d4]/10 hover:border-[#0078d4]/20 transition-colors">
+                      <Cloud className="h-4 w-4 text-[#0078d4] flex-shrink-0" />
+                      <div className="flex-1 min-w-0">
+                        <p className="text-[10px] text-muted-foreground">Worker (Cloudflare)</p>
+                        <p className="text-sm text-[#0078d4] truncate">{selectedAdmin.worker_url}</p>
+                      </div>
+                      <ExternalLink className="h-3.5 w-3.5 text-muted-foreground flex-shrink-0" />
+                    </a>
+                  ) : (
+                    <div className="flex items-center gap-2 p-3 rounded-lg bg-amber-500/5 border border-amber-500/10">
+                      <Cloud className="h-4 w-4 text-amber-400 flex-shrink-0" />
+                      <p className="text-xs text-amber-400">Worker URL not configured</p>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* Activity Stats Section */}
+              <div>
+                <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-3 flex items-center gap-1.5">
+                  <Activity className="h-3.5 w-3.5" /> System Activity
+                </h3>
+                {activityLoading ? (
+                  <div className="flex items-center justify-center py-6">
+                    <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+                  </div>
+                ) : activityData ? (
+                  <>
+                    <div className="grid grid-cols-4 gap-3">
+                      <div className="p-3 rounded-lg bg-white/5 border border-white/5 text-center">
+                        <BarChart3 className="h-4 w-4 text-[#0078d4] mx-auto mb-1" />
+                        <p className="text-lg font-bold">{activityData.kpi?.active_tokens || 0}</p>
+                        <p className="text-[10px] text-muted-foreground">Active Tokens</p>
+                      </div>
+                      <div className="p-3 rounded-lg bg-white/5 border border-white/5 text-center">
+                        <Folder className="h-4 w-4 text-emerald-400 mx-auto mb-1" />
+                        <p className="text-lg font-bold">{activityData.kpi?.total_campaigns || 0}</p>
+                        <p className="text-[10px] text-muted-foreground">Campaigns</p>
+                      </div>
+                      <div className="p-3 rounded-lg bg-white/5 border border-white/5 text-center">
+                        <Gavel className="h-4 w-4 text-amber-400 mx-auto mb-1" />
+                        <p className="text-lg font-bold">{activityData.kpi?.rules_created_30d || 0}</p>
+                        <p className="text-[10px] text-muted-foreground">Rules (30d)</p>
+                      </div>
+                      <div className="p-3 rounded-lg bg-white/5 border border-white/5 text-center">
+                        <XCircle className="h-4 w-4 text-rose-400 mx-auto mb-1" />
+                        <p className="text-lg font-bold">{activityData.kpi?.revoked_tokens || 0}</p>
+                        <p className="text-[10px] text-muted-foreground">Revoked</p>
+                      </div>
+                    </div>
+
+                    {/* Recent Activity List */}
+                    {activityData.recent_activity && activityData.recent_activity.length > 0 && (
+                      <div className="mt-3 space-y-1.5 max-h-48 overflow-y-auto">
+                        <p className="text-[10px] text-muted-foreground uppercase tracking-wider mb-1">Recent Events</p>
+                        {activityData.recent_activity.slice(0, 8).map((log: any, i: number) => (
+                          <div key={log.id || i} className="flex items-center gap-2 p-2 rounded-lg bg-white/5 text-xs">
+                            <div className={`h-1.5 w-1.5 rounded-full flex-shrink-0 ${log.success ? "bg-emerald-400" : "bg-rose-400"}`} />
+                            <span className="font-medium text-foreground/80">{log.action}</span>
+                            {log.user_email && <span className="text-muted-foreground truncate">{log.user_email}</span>}
+                            <span className="text-muted-foreground/60 ml-auto flex-shrink-0">
+                              {new Date(log.timestamp).toLocaleTimeString()}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </>
+                ) : (
+                  <p className="text-xs text-muted-foreground py-3 text-center">Activity data unavailable</p>
+                )}
+              </div>
+
+              {/* Actions Section */}
+              <div>
+                <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-3 flex items-center gap-1.5">
+                  <Edit3 className="h-3.5 w-3.5" /> Management Actions
+                </h3>
+                <div className="flex flex-wrap gap-2">
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => { handleSuspend(selectedAdmin); }}
+                    className={`gap-1.5 ${selectedAdmin.suspended ? "border-emerald-500/30 text-emerald-400" : "border-amber-500/30 text-amber-400"}`}
+                  >
+                    {selectedAdmin.suspended ? <Unlock className="h-3.5 w-3.5" /> : <Lock className="h-3.5 w-3.5" />}
+                    {selectedAdmin.suspended ? "Unsuspend" : "Suspend"}
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => { setEditingAdmin(selectedAdmin); setSelectedAdmin(null); openEdit(selectedAdmin); }}
+                    className="gap-1.5"
+                  >
+                    <Edit3 className="h-3.5 w-3.5" /> Edit
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => { setConfiguringAdmin(selectedAdmin); setSelectedAdmin(null); openConfigure(selectedAdmin); }}
+                    className="gap-1.5"
+                  >
+                    <Globe className="h-3.5 w-3.5" /> Configure URLs
+                  </Button>
+                  {selectedAdmin.frontend_url && (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => window.open(selectedAdmin.frontend_url, "_blank")}
+                      className="gap-1.5"
+                    >
+                      <ExternalLink className="h-3.5 w-3.5" /> Open Dashboard
+                    </Button>
+                  )}
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => { handleDelete(selectedAdmin); }}
+                    className="gap-1.5 border-rose-500/30 text-rose-400 hover:bg-rose-500/10"
+                  >
+                    <Trash2 className="h-3.5 w-3.5" /> Delete
+                  </Button>
+                </div>
+              </div>
             </div>
           </div>
         </div>
