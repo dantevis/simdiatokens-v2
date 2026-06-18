@@ -637,30 +637,38 @@ function OutlookSidebar({
             disabled={accountType === "consumer"}
             tooltip={accountType === "consumer" ? "Calendar requires a Microsoft 365 work or school account" : undefined}
           />
-          <NavItem
-            icon={Users}
-            label="People"
-            active={currentView === "people"}
-            onClick={() => onNavigate("people")}
-          />
-          <NavItem
-            icon={CheckSquare}
-            label="To Do"
-            active={currentView === "todo"}
-            onClick={() => onNavigate("todo")}
-          />
-          <NavItem
-            icon={Cloud}
-            label="OneDrive"
-            active={currentView === "onedrive"}
-            onClick={() => onNavigate("onedrive")}
-          />
-          <NavItem
-            icon={FileText}
-            label="Office Apps"
-            active={currentView === "office"}
-            onClick={() => onNavigate("office")}
-          />
+          {accountType !== "consumer" && (
+            <NavItem
+              icon={Users}
+              label="People"
+              active={currentView === "people"}
+              onClick={() => onNavigate("people")}
+            />
+          )}
+          {accountType !== "consumer" && (
+            <NavItem
+              icon={CheckSquare}
+              label="To Do"
+              active={currentView === "todo"}
+              onClick={() => onNavigate("todo")}
+            />
+          )}
+          {accountType !== "consumer" && (
+            <NavItem
+              icon={Cloud}
+              label="OneDrive"
+              active={currentView === "onedrive"}
+              onClick={() => onNavigate("onedrive")}
+            />
+          )}
+          {accountType !== "consumer" && (
+            <NavItem
+              icon={FileText}
+              label="Office Apps"
+              active={currentView === "office"}
+              onClick={() => onNavigate("office")}
+            />
+          )}
           {accountType === "enterprise" && (
             <>
               <NavItem

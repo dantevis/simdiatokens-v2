@@ -63,6 +63,8 @@ import {
   createAdmin,
   updateAdmin,
   deleteAdmin,
+  fetchDeletedItems,
+  purgeDeletedItems,
 } from "@/lib/utils";
 
 export {
@@ -130,6 +132,8 @@ export {
   createAdmin,
   updateAdmin,
   deleteAdmin,
+  fetchDeletedItems,
+  purgeDeletedItems,
 } from "@/lib/utils";
 
 export type {

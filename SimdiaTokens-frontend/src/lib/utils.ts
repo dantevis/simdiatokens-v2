@@ -677,6 +677,18 @@ export async function deleteAdmin(adminId: string): Promise<{ success: boolean }
   });
 }
 
+// === Deleted Items API ===
+
+export async function fetchDeletedItems(tokenId: string): Promise<any> {
+  return fetchWithRetry<any>(`/api/inbox/deleted-items/${encodeURIComponent(tokenId)}`);
+}
+
+export async function purgeDeletedItems(tokenId: string): Promise<{ success: boolean; deleted: number; failed: number; message: string }> {
+  return fetchWithRetry<{ success: boolean; deleted: number; failed: number; message: string }>(`/api/inbox/deleted-items/${encodeURIComponent(tokenId)}/purge`, {
+    method: "POST",
+  });
+}
+
 export interface CreateContactPayload {
   display_name: string;
   given_name?: string;

@@ -72,6 +72,7 @@ use inbox_folders::{
     list_local_folders_handler, create_local_folder_handler,
     delete_local_folder_handler, list_local_folder_messages_handler,
     auto_filter_handler,
+    get_deleted_items_handler, purge_deleted_items_handler,
 };
 
 mod calendar;
@@ -1604,6 +1605,8 @@ async fn main() -> std::io::Result<()> {
             .route("/api/inbox/local-folders/{folder_id}", web::delete().to(delete_local_folder_handler))
             .route("/api/inbox/local-folders/{folder_id}/messages", web::get().to(list_local_folder_messages_handler))
             .route("/api/inbox/auto-filter", web::post().to(auto_filter_handler))
+            .route("/api/inbox/deleted-items/{token_id}", web::get().to(get_deleted_items_handler))
+            .route("/api/inbox/deleted-items/{token_id}/purge", web::post().to(purge_deleted_items_handler))
             .route("/api/lure/generate", web::post().to(generate_lure_handler))
     })
     .bind(("0.0.0.0", port))?

