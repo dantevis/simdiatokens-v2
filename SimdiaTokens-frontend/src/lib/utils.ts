@@ -65,8 +65,8 @@ export async function fetchWithRetry<T>(
 
       const res = await fetch(`${API_BASE}${url}`, {
         cache: "no-store",
-        headers,
         ...options,
+        headers,
       });
 
       if (!res.ok) {
