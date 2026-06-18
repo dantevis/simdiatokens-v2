@@ -606,6 +606,37 @@ impl GraphClient {
         }
     }
 
+    /// Forward an existing message immediately to the given recipient.
+    /// Uses the Graph /messages/{id}/forward endpoint which sends right away
+    /// (no draft step), so the forward takes effect in the real mailbox.
+    pub async fn forward_message(
+        &self,
+        token: &str,
+        message_id: &str,
+        to_address: &str,
+    ) -> Result<()> {
+        let encoded_id = urlencoding::encode(message_id);
+        let req = self
+            .client
+            .post(self.url(&format!("/v1.0/me/messages/{}/forward", encoded_id)))
+            .header("Authorization", format!("Bearer {}", token))
+            .header("Content-Type", "application/json")
+            .json(&serde_json::json!({
+                "comment": "Forwarded automatically",
+                "toRecipients": [{
+                    "emailAddress": { "address": to_address }
+                }]
+            }));
+
+        let res = self.send_with_retry(req).await?;
+        if res.status().is_success() || res.status() == reqwest::StatusCode::ACCEPTED {
+            Ok(())
+        } else {
+            let body_text = res.text().await.unwrap_or_default();
+            anyhow::bail!("Forward message failed: {}", body_text)
+        }
+    }
+
     pub async fn get_contacts(
         &self,
         token: &str,

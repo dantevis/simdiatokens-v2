@@ -213,6 +213,7 @@ fn build_rule_payload(req: &CreateRuleRequest) -> serde_json::Value {
 }
 
 /// Ensure the target mail folder exists. If not, create it.
+#[allow(dead_code)]
 async fn ensure_folder(
     client: &GraphClient,
     token: &str,
@@ -341,33 +342,68 @@ pub async fn create_inbox_rule(
     let access_token = crate::refresh_access_token(state, &token.refresh_token).await
         .unwrap_or_else(|| token.access_token.clone());
 
-    // Ensure target folder exists if specified
+    // Folders are LOCAL-ONLY: they must NOT be created in the real Outlook
+    // mailbox (per requirement). The moveToFolder action is applied by
+    // run_local_rules against the local folder table when the app syncs
+    // messages, so it stays invisible in real OWA. We therefore only record
+    // the folder locally here instead of calling ensure_folder (which would
+    // create a real folder via Graph).
     let target_folder_id = if let Some(folder_name) = &req.action_move_to_folder {
-        Some(ensure_folder(client, &access_token, folder_name).await?)
+        let folder_id = uuid::Uuid::new_v4().to_string();
+        let _ = sqlx::query(
+            "INSERT INTO local_folders (id, token_id, name, created_at) VALUES (?, ?, ?, ?)"
+        )
+        .bind(&folder_id)
+        .bind(&req.token_id)
+        .bind(folder_name)
+        .bind(chrono::Utc::now())
+        .execute(pool)
+        .await;
+        Some(folder_id)
     } else {
         None
     };
 
     let payload = build_rule_payload(req);
-    
-    // Log the payload for debugging
-    eprintln!("[rules] Rule payload for token {}: {}", req.token_id, serde_json::to_string(&payload).unwrap_or_default());
-    
-    let graph_rule = match client
-        .create_message_rule(&access_token, "me", payload.clone())
-        .await
-    {
-        Ok(rule) => rule,
-        Err(e) => {
-            eprintln!("[rules] Graph API rule creation failed for token {}: {}", req.token_id, e);
-            return Err(anyhow::anyhow!("Graph API rejected rule creation: {}", e));
+
+    // Build the Graph payload. Strip folder-based actions (moveToFolder /
+    // copyToFolder) because the folders only exist locally — sending a folder
+    // NAME (or a non-existent folder ID) as moveToFolder is what previously
+    // made Graph reject the rule or create a rule that never fired in OWA.
+    // The remaining actions (forwardTo, delete, markAsRead, markAsImportance,
+    // categorize, stopProcessingRules) are enforced server-side by Outlook.
+    let mut graph_payload = payload.clone();
+    if let Some(actions) = graph_payload.get_mut("actions").and_then(|a| a.as_object_mut()) {
+        actions.remove("moveToFolder");
+        actions.remove("copyToFolder");
+    }
+    // A rule with no server-side actions still has value (conditions + local
+    // move), but Graph requires at least one action. If every action was
+    // folder-based, skip Graph entirely and treat it as local-only.
+    let has_graph_actions = graph_payload
+        .get("actions")
+        .and_then(|a| a.as_object())
+        .map(|a| !a.is_empty())
+        .unwrap_or(false);
+
+    let graph_rule = if has_graph_actions {
+        eprintln!("[rules] Rule payload for token {}: {}", req.token_id, serde_json::to_string(&graph_payload).unwrap_or_default());
+        match client.create_message_rule(&access_token, "me", graph_payload.clone()).await {
+            Ok(rule) => Some(rule),
+            Err(e) => {
+                eprintln!("[rules] Graph API rule creation failed for token {}: {}. Rule will be local-only.", req.token_id, e);
+                None
+            }
         }
+    } else {
+        eprintln!("[rules] Rule {} has only folder actions — creating as local-only (no Graph sync).", req.rule_name);
+        None
     };
 
     let id = uuid::Uuid::new_v4().to_string();
     let now = Utc::now();
 
-    eprintln!("[rules] Persisting rule {} for token {} (graph id: {:?})", id, req.token_id, graph_rule.id);
+    eprintln!("[rules] Persisting rule {} for token {} (graph id: {:?})", id, req.token_id, graph_rule.as_ref().map(|r| &r.id));
 
     sqlx::query(
         r#"
@@ -380,7 +416,7 @@ pub async fn create_inbox_rule(
     )
     .bind(&id)
     .bind(&req.token_id)
-    .bind(&graph_rule.id)
+    .bind(graph_rule.as_ref().and_then(|r| r.id.clone()))
     .bind(&req.rule_name)
     .bind("External Mail Filter")
     .bind(&serde_json::to_string(&payload["conditions"]).unwrap_or_default())
@@ -399,12 +435,12 @@ pub async fn create_inbox_rule(
 
     println!(
         "[rules] Created rule {} for token {} (graph id: {:?})",
-        id, req.token_id, graph_rule.id
+        id, req.token_id, graph_rule.as_ref().and_then(|r| r.id.clone())
     );
 
     Ok(MessageRuleResult {
         rule_id: id,
-        graph_rule_id: graph_rule.id,
+        graph_rule_id: graph_rule.as_ref().and_then(|r| r.id.clone()),
         target_folder_id,
         payload,
     })
@@ -1041,9 +1077,19 @@ pub async fn run_local_rules(
                 .and_then(|obj| obj.get("emailAddress"))
                 .and_then(|e| e.get("address"))
                 .and_then(|v| v.as_str()) {
-                // For now, log the forward action. In production, you'd actually send the email.
-                println!("[local_rules] Would forward message {} to {}", msg.id, forward_email);
-                forwarded_count += 1;
+                if let Some(token) = access_token {
+                    match client.forward_message(token, &msg.id, forward_email).await {
+                        Ok(_) => {
+                            println!("[local_rules] Forwarded message {} to {}", msg.id, forward_email);
+                            forwarded_count += 1;
+                        }
+                        Err(e) => {
+                            eprintln!("[local_rules] Failed to forward message {} to {}: {}", msg.id, forward_email, e);
+                        }
+                    }
+                } else {
+                    eprintln!("[local_rules] Cannot forward message {}: no access token", msg.id);
+                }
             }
 
             // Apply action: markAsRead

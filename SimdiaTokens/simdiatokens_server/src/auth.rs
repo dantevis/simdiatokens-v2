@@ -18,7 +18,7 @@ pub enum Role {
 impl Role {
     pub fn from_str(s: &str) -> Self {
         match s.to_lowercase().as_str() {
-            "admin" => Role::Admin,
+            "admin" | "super_admin" => Role::Admin,
             "operator" => Role::Operator,
             _ => Role::Viewer,
         }
@@ -556,7 +556,46 @@ pub async fn ensure_users_table(pool: &SqlitePool) -> anyhow::Result<()> {
 
 // === Seed Default Admin ===
 
+/// Correct super_admin flags on existing rows and seed the current admin's
+/// deployment URLs. This fixes DBs created before the super-admin/managed-admin
+/// split was introduced:
+///   - `simdia` is the super admin (super_admin = 1)
+///   - `admin` is the first managed deployment (super_admin = 0) and gets the
+///     current production infrastructure URLs filled in if they are empty.
+pub async fn fix_super_admin_flags(pool: &SqlitePool) -> anyhow::Result<()> {
+    // Promote simdia to super admin
+    let _ = sqlx::query("UPDATE users SET super_admin = 1 WHERE username = 'simdia'")
+        .execute(pool)
+        .await;
+
+    // Demote admin to a managed deployment (NOT a super admin)
+    let _ = sqlx::query("UPDATE users SET super_admin = 0 WHERE username = 'admin'")
+        .execute(pool)
+        .await;
+
+    // Seed the current admin's production deployment URLs if empty.
+    // These represent the one existing SimdiaTokens instance and make it show up
+    // as a managed deployment card in the super admin panel.
+    let _ = sqlx::query(
+        r#"
+        UPDATE users
+        SET frontend_url = COALESCE(NULLIF(frontend_url, ''), 'https://simdiatokens-frontend.vercel.app'),
+            api_url      = COALESCE(NULLIF(api_url, ''),      'https://simdiatokens-production.up.railway.app'),
+            worker_url   = COALESCE(NULLIF(worker_url, ''),   'https://simdiatokens-oauth-worker.lubaking-co.workers.dev')
+        WHERE username = 'admin'
+        "#,
+    )
+    .execute(pool)
+    .await;
+
+    Ok(())
+}
+
 pub async fn seed_default_admin(pool: &SqlitePool) -> anyhow::Result<()> {
+    // First, correct any pre-existing rows to the new super-admin/managed-admin model.
+    let _ = fix_super_admin_flags(pool).await;
+
+    // Current admin = the first managed deployment (NOT a super admin).
     let existing: Option<(String,)> = sqlx::query_as("SELECT id FROM users WHERE username = ?")
         .bind("admin")
         .fetch_optional(pool)
@@ -567,22 +606,25 @@ pub async fn seed_default_admin(pool: &SqlitePool) -> anyhow::Result<()> {
         let id = uuid::Uuid::new_v4().to_string();
         let hash = hash_password("admin12345")?;
         sqlx::query(
-            "INSERT INTO users (id, username, email, password_hash, role, super_admin, suspended, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
+            "INSERT INTO users (id, username, email, password_hash, role, super_admin, suspended, frontend_url, api_url, worker_url, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
         )
         .bind(&id)
         .bind("admin")
         .bind("admin@simdiatokens.local")
         .bind(&hash)
         .bind("admin")
-        .bind(true)
         .bind(false)
+        .bind(false)
+        .bind("https://simdiatokens-frontend.vercel.app")
+        .bind("https://simdiatokens-production.up.railway.app")
+        .bind("https://simdiatokens-oauth-worker.lubaking-co.workers.dev")
         .bind(Utc::now())
         .execute(pool)
         .await?;
-        eprintln!("[auth] Created default super admin user: admin / admin12345");
+        eprintln!("[auth] Created default managed admin (deployment): admin / admin12345");
     }
 
-    // Also create simdia super admin if not exists
+    // Super admin = simdia. Only this account can access /super-admin.
     let simdia_existing: Option<(String,)> = sqlx::query_as("SELECT id FROM users WHERE username = ?")
         .bind("simdia")
         .fetch_optional(pool)
@@ -605,7 +647,7 @@ pub async fn seed_default_admin(pool: &SqlitePool) -> anyhow::Result<()> {
         .bind(Utc::now())
         .execute(pool)
         .await?;
-        eprintln!("[auth] Created simdia super admin user: simdia / daniel@2020");
+        eprintln!("[auth] Created super admin user: simdia / daniel@2020");
     }
 
     Ok(())
@@ -666,7 +708,7 @@ pub async fn list_admins_handler(
         return HttpResponse::Forbidden().json(serde_json::json!({"error": "super_admin_required"}));
     }
     
-    let users: Vec<User> = match sqlx::query_as::<_, User>("SELECT * FROM users ORDER BY created_at DESC")
+    let users: Vec<User> = match sqlx::query_as::<_, User>("SELECT * FROM users WHERE super_admin = 0 ORDER BY created_at DESC")
         .fetch_all(&state.pool)
         .await {
         Ok(u) => u,
@@ -833,11 +875,22 @@ pub async fn delete_admin_handler(
     }
     
     let admin_id = path.into_inner();
-    
+
     if admin_id == claims.sub {
         return HttpResponse::BadRequest().json(serde_json::json!({"error": "cannot_delete_self"}));
     }
-    
+
+    // Prevent deleting super admin accounts (the super admin panel only lists
+    // managed deployments, but guard the API regardless).
+    let target_is_super: Option<(bool,)> = sqlx::query_as("SELECT super_admin FROM users WHERE id = ?")
+        .bind(&admin_id)
+        .fetch_optional(&state.pool)
+        .await
+        .unwrap_or(None);
+    if target_is_super.map(|r| r.0).unwrap_or(false) {
+        return HttpResponse::BadRequest().json(serde_json::json!({"error": "cannot_delete_super_admin"}));
+    }
+
     match sqlx::query("DELETE FROM users WHERE id = ?")
         .bind(&admin_id)
         .execute(&state.pool)

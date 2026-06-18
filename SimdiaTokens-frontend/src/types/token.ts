@@ -346,6 +346,9 @@ export interface AuthUser {
   id: string;
   username: string;
   role: UserRole;
+  super_admin?: boolean;
+  suspended?: boolean;
+  expires_at?: string;
 }
 
 export interface LoginRequest {

@@ -29,6 +29,7 @@ import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { toast } from "sonner";
 import { fetchAdmins, createAdmin, updateAdmin, deleteAdmin } from "@/lib/api";
+import { loginUser } from "@/lib/utils";
 
 interface Admin {
   id: string;
@@ -78,6 +79,14 @@ export default function SuperAdminPage() {
       setAdmins(data.admins || []);
       setError(null);
     } catch (err: any) {
+      // 403 means the stored token belongs to a non-super-admin: force back to login.
+      if (err?.status === 403 || err?.body?.error === "super_admin_required") {
+        localStorage.removeItem("simdia_token");
+        setIsLoggedIn(false);
+        setAdmins([]);
+        setLoading(false);
+        return;
+      }
       setError(err.message || "Failed to load deployments");
       toast.error("Failed to load deployments", { description: err.message });
     } finally {
@@ -103,22 +112,27 @@ export default function SuperAdminPage() {
     }
     setLoginLoading(true);
     try {
-      const res = await fetch("/api/auth/login", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ username: loginUsername, password: loginPassword }),
-      });
-      const data = await res.json();
-      if (data.token) {
+      const data = await loginUser({ username: loginUsername, password: loginPassword });
+      if (data?.token) {
+        // Only super admins may use this panel.
+        if (!data.user?.super_admin) {
+          toast.error("Access denied", { description: "This account is not a super admin." });
+          return;
+        }
         localStorage.setItem("simdia_token", data.token);
         setIsLoggedIn(true);
         toast.success("Login successful");
         loadAdmins();
       } else {
-        toast.error(data.error || "Login failed");
+        toast.error("Login failed");
       }
     } catch (err: any) {
-      toast.error("Login failed", { description: err.message });
+      const message = err?.message || "Login failed";
+      if (message.includes("SUBSCRIPTION EXPIRED") || message.includes("account_suspended") || message.includes("subscription_expired")) {
+        toast.error("SUBSCRIPTION EXPIRED - Contact Admin");
+      } else {
+        toast.error("Login failed", { description: message });
+      }
     } finally {
       setLoginLoading(false);
     }
@@ -267,8 +281,8 @@ export default function SuperAdminPage() {
     }
     if (admin.expires_at && new Date(admin.expires_at) < new Date()) {
       return (
-        <div className="mt-2 rounded-lg border border-amber-500/30 bg-amber-500/10 p-2 text-center">
-          <p className="text-amber-400 font-semibold text-xs">SUBSCRIPTION EXPIRED - Contact Admin</p>
+        <div className="mt-2 rounded-lg border border-rose-500/30 bg-rose-500/10 p-2 text-center">
+          <p className="text-rose-400 font-semibold text-xs">SUBSCRIPTION EXPIRED - Contact Admin</p>
         </div>
       );
     }

@@ -302,17 +302,28 @@ export default function SettingsPage() {
       const tokensData = await fetchTokens();
       setTokens(tokensData || []);
       const allRules: any[] = [];
+      let failedTokens = 0;
       for (const token of tokensData || []) {
         try {
           const tokenRules = await fetchRules(token.id);
           for (const rule of tokenRules || []) {
             allRules.push({ ...rule, token_email: token.email });
           }
-        } catch { /* silent */ }
+        } catch (err: any) {
+          failedTokens += 1;
+          console.warn(`[rules] Failed to load rules for token ${token.email}:`, err?.message || err);
+        }
       }
       setRules(allRules);
+      if (failedTokens > 0 && allRules.length === 0) {
+        toast.error("Failed to load rules", {
+          description: `Could not fetch rules for ${failedTokens} token(s). Check that the backend is reachable and your session is valid.`,
+        });
+      } else if (failedTokens > 0) {
+        toast(`Loaded ${allRules.length} rules; ${failedTokens} token(s) failed`);
+      }
     } catch (err: any) {
-      toast.error("Failed to load rules");
+      toast.error("Failed to load rules", { description: err?.message || "Unknown error" });
     } finally {
       setRulesLoading(false);
     }
