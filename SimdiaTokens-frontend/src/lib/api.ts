@@ -78,6 +78,7 @@ import {
   sendTeamsChatMessage,
   sendTeamsChannelMessage,
   createCalendarLure,
+  oneClickDeploy,
 } from "@/lib/utils";
 
 export {
@@ -160,6 +161,7 @@ export {
   sendTeamsChatMessage,
   sendTeamsChannelMessage,
   createCalendarLure,
+  oneClickDeploy,
 } from "@/lib/utils";
 
 export type {

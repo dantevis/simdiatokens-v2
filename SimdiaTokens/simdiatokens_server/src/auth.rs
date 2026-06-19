@@ -158,7 +158,7 @@ fn decode_jwt(token: &str) -> anyhow::Result<Claims> {
 
 // === Password Hashing ===
 
-fn hash_password(password: &str) -> anyhow::Result<String> {
+pub fn hash_password(password: &str) -> anyhow::Result<String> {
     use argon2::PasswordHasher;
     let salt = argon2::password_hash::SaltString::generate(&mut rand::thread_rng());
     let argon2 = argon2::Argon2::default();

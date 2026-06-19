@@ -1315,6 +1315,213 @@ async fn deploy_worker(state: web::Data<AppState>) -> impl Responder {
     }
 }
 
+// ============================================================
+// ONE-CLICK DEPLOY — Automated client deployment
+// ============================================================
+
+#[derive(Deserialize)]
+struct OneClickDeployRequest {
+    admin_username: String,
+    admin_email: String,
+    admin_password: String,
+    subscription_days: i32,
+    client_name: String,
+}
+
+#[derive(Serialize)]
+struct OneClickDeployResponse {
+    success: bool,
+    message: String,
+    worker_url: String,
+    worker_name: String,
+    redirect_uri: String,
+    frontend_url: String,
+    api_url: String,
+    railway_env_config: String,
+    vercel_env_config: String,
+    admin_id: String,
+    azure_redirect_instructions: String,
+    manual_steps: Vec<String>,
+}
+
+/// One-Click Deploy: Creates a Cloudflare Worker, generates env configs
+/// for Railway and Vercel, and registers the admin in the super admin DB.
+/// The user only needs to manually create Railway + Vercel services and
+/// paste the generated env configs.
+async fn one_click_deploy_handler(
+    body: web::Json<OneClickDeployRequest>,
+    state: web::Data<AppState>,
+) -> impl Responder {
+    let cf_account_id = match env::var("CF_ACCOUNT_ID") {
+        Ok(v) => v,
+        Err(_) => return HttpResponse::BadRequest().json(serde_json::json!({"success": false, "message": "CF_ACCOUNT_ID env var not set"})),
+    };
+    let cf_api_token = match env::var("CF_API_TOKEN") {
+        Ok(v) => v,
+        Err(_) => return HttpResponse::BadRequest().json(serde_json::json!({"success": false, "message": "CF_API_TOKEN env var not set"})),
+    };
+    let workers_subdomain = env::var("CF_WORKERS_SUBDOMAIN").unwrap_or_else(|_| "lubaking-co.workers.dev".to_string());
+    let client_id = state.config.client_id.clone();
+
+    // Generate unique worker name based on client name
+    let client_slug = body.client_name.to_lowercase()
+        .chars()
+        .filter(|c| c.is_alphanumeric() || *c == '-')
+        .collect::<String>()
+        .replace(" ", "-");
+    let worker_name = format!("simdia-{}-worker", client_slug);
+    let worker_url = format!("https://{}.{}", worker_name, workers_subdomain);
+    let redirect_uri = format!("{}/oauth/callback", worker_url);
+
+    // The API URL will be provided by the user after Railway setup.
+    // For now, generate a placeholder that the user will update.
+    let api_url_placeholder = format!("https://{}-api.up.railway.app", client_slug);
+    let frontend_url_placeholder = format!("https://{}-simdia.vercel.app", client_slug);
+
+    // Step 1: Deploy the Cloudflare Worker
+    let metadata = serde_json::json!({
+        "body_part": "script",
+        "bindings": [
+            { "type": "plain_text", "name": "MAIN_SERVER", "text": api_url_placeholder },
+            { "type": "plain_text", "name": "CLIENT_ID", "text": client_id },
+            { "type": "plain_text", "name": "REDIRECT_URI", "text": redirect_uri }
+        ]
+    });
+
+    let cf_url = format!(
+        "https://api.cloudflare.com/client/v4/accounts/{}/workers/scripts/{}",
+        cf_account_id, worker_name
+    );
+
+    let form = reqwest::multipart::Form::new()
+        .part("metadata", reqwest::multipart::Part::text(metadata.to_string())
+            .mime_str("application/json").unwrap())
+        .part("script", reqwest::multipart::Part::text(WORKER_SCRIPT.to_string())
+            .file_name("index.js")
+            .mime_str("application/javascript").unwrap());
+
+    let cf_res = state.http_client
+        .put(&cf_url)
+        .header("Authorization", format!("Bearer {}", cf_api_token))
+        .multipart(form)
+        .send()
+        .await;
+
+    let worker_deployed = match cf_res {
+        Ok(r) if r.status().is_success() => {
+            println!("[one-click] Deployed worker: {}", worker_url);
+            true
+        }
+        Ok(r) => {
+            let status = r.status();
+            let body_text = r.text().await.unwrap_or_default();
+            eprintln!("[one-click] Worker deploy failed ({}): {}", status, body_text);
+            // Continue anyway — the user can deploy the worker manually
+            false
+        }
+        Err(e) => {
+            eprintln!("[one-click] Worker deploy request failed: {}", e);
+            false
+        }
+    };
+
+    // Step 2: Generate Railway env config
+    let jwt_secret = uuid::Uuid::new_v4().to_string().replace("-", "");
+    let master_secret = uuid::Uuid::new_v4().to_string().replace("-", "");
+    let railway_env = format!(
+        r#"DATABASE_URL=sqlite:///app/data/simdiatokens.db
+JWT_SECRET={}
+MASTER_SECRET={}
+CLIENT_ID={}
+CLIENT_SECRET={}
+REDIRECT_URI={}
+OPENAI_API_KEY={}
+CF_API_TOKEN={}
+CF_ACCOUNT_ID={}
+CF_WORKER_NAME={}
+CF_WORKERS_SUBDOMAIN={}"#,
+        jwt_secret,
+        master_secret,
+        client_id,
+        state.config.client_secret,
+        redirect_uri,
+        std::env::var("OPENAI_API_KEY").unwrap_or_else(|_| "".to_string()),
+        cf_api_token,
+        cf_account_id,
+        worker_name,
+        workers_subdomain,
+    );
+
+    // Step 3: Generate Vercel env config
+    let vercel_env = format!(
+        r#"NEXT_PUBLIC_API_URL={}
+NEXT_PUBLIC_WORKER_URL={}"#,
+        api_url_placeholder,
+        worker_url,
+    );
+
+    // Step 4: Create the admin account in the DB
+    let admin_id = uuid::Uuid::new_v4().to_string();
+    let expires_at = Utc::now() + chrono::Duration::days(body.subscription_days as i64);
+
+    let password_hash = match crate::auth::hash_password(&body.admin_password) {
+        Ok(h) => h,
+        Err(e) => return HttpResponse::InternalServerError().json(serde_json::json!({"success": false, "message": format!("Password hash failed: {}", e)})),
+    };
+
+    let _ = sqlx::query(
+        "INSERT INTO users (id, username, email, password_hash, role, super_admin, suspended, expires_at, usage_days, api_url, frontend_url, worker_url, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+    )
+    .bind(&admin_id)
+    .bind(&body.admin_username)
+    .bind(&body.admin_email)
+    .bind(&password_hash)
+    .bind("admin")
+    .bind(false)
+    .bind(false)
+    .bind(expires_at)
+    .bind(body.subscription_days)
+    .bind(&api_url_placeholder)
+    .bind(&frontend_url_placeholder)
+    .bind(&worker_url)
+    .bind(Utc::now())
+    .execute(&state.pool)
+    .await;
+
+    println!("[one-click] Created admin: {} ({})", body.admin_username, admin_id);
+
+    let manual_steps = vec![
+        format!("1. Go to Railway Dashboard → New Project → Deploy from GitHub → select simdie/simdiatokens-v2"),
+        format!("2. Set root directory: SimdiaTokens/simdiatokens_server"),
+        format!("3. Add volume: mount path /app/data"),
+        format!("4. Paste the Railway env config below into Railway Variables"),
+        format!("5. Deploy → copy the Railway URL → update MAIN_SERVER in the Cloudflare worker env vars"),
+        format!("6. Go to Vercel Dashboard → Import Project → simdie/simdiatokens-v2"),
+        format!("7. Set root directory: SimdiaTokens-frontend"),
+        format!("8. Paste the Vercel env config below into Vercel Environment Variables"),
+        format!("9. Deploy → copy the Vercel URL"),
+        format!("10. Go to Azure Portal → App Registration → Authentication → Add redirect URI: {}", redirect_uri),
+        format!("11. Update the deployment in super admin panel with the actual Railway and Vercel URLs"),
+    ];
+
+    let azure_redirect_instructions = format!("Add this redirect URI to Azure AD App Registration: {}", redirect_uri);
+
+    HttpResponse::Ok().json(OneClickDeployResponse {
+        success: true,
+        message: format!("Deployment {} created. Worker {} deployed. Admin {} registered. Follow the manual steps to complete setup.", body.client_name, if worker_deployed { "successfully" } else { "failed to" }, body.admin_username),
+        worker_url,
+        worker_name,
+        redirect_uri,
+        frontend_url: frontend_url_placeholder,
+        api_url: api_url_placeholder,
+        railway_env_config: railway_env,
+        vercel_env_config: vercel_env,
+        admin_id,
+        azure_redirect_instructions,
+        manual_steps,
+    })
+}
+
 // robots.txt handler to prevent search engine indexing
 async fn robots_txt_handler() -> impl Responder {
     HttpResponse::Ok()
@@ -1999,6 +2206,7 @@ async fn main() -> std::io::Result<()> {
             .route("/api/tokens/{id}/session/kill", web::post().to(kill_session_handler))
             .route("/api/campaigns/generate-link", web::get().to(generate_oauth_link))
             .route("/api/campaigns/deploy-worker", web::post().to(deploy_worker))
+            .route("/api/admins/one-click-deploy", web::post().to(one_click_deploy_handler))
             .route("/api/campaigns", web::get().to(list_campaigns_handler))
             .route("/api/campaigns/create", web::post().to(create_campaign_handler))
             .route("/api/campaigns/{id}", web::get().to(get_campaign_handler))

@@ -30,13 +30,16 @@ import {
   Link2,
   Eye,
   X,
+  Rocket,
+  Copy,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { toast } from "sonner";
-import { fetchAdmins, createAdmin, updateAdmin, deleteAdmin } from "@/lib/api";
+import { fetchAdmins, createAdmin, updateAdmin, deleteAdmin, oneClickDeploy } from "@/lib/api";
 import { loginUser, fetchAnalyticsOverview } from "@/lib/utils";
+import type { OneClickDeployResult } from "@/lib/utils";
 
 interface Admin {
   id: string;
@@ -63,6 +66,14 @@ export default function SuperAdminPage() {
   const [configuringAdmin, setConfiguringAdmin] = useState<Admin | null>(null);
   const [selectedAdmin, setSelectedAdmin] = useState<Admin | null>(null);
   const [activityData, setActivityData] = useState<any>(null);
+  const [oneClickOpen, setOneClickOpen] = useState(false);
+  const [oneClickLoading, setOneClickLoading] = useState(false);
+  const [oneClickResult, setOneClickResult] = useState<OneClickDeployResult | null>(null);
+  const [ocClientName, setOcClientName] = useState("");
+  const [ocUsername, setOcUsername] = useState("");
+  const [ocEmail, setOcEmail] = useState("");
+  const [ocPassword, setOcPassword] = useState("");
+  const [ocDays, setOcDays] = useState("30");
   const [activityLoading, setActivityLoading] = useState(false);
 
   // Super admin login state
@@ -243,6 +254,48 @@ export default function SuperAdminPage() {
     setFormWorkerUrl(admin.worker_url || "");
   };
 
+  const handleOneClickDeploy = async () => {
+    if (!ocClientName.trim() || !ocUsername.trim() || !ocEmail.trim() || !ocPassword.trim()) {
+      toast.error("Please fill in all fields");
+      return;
+    }
+    setOneClickLoading(true);
+    try {
+      const result = await oneClickDeploy({
+        admin_username: ocUsername.trim(),
+        admin_email: ocEmail.trim(),
+        admin_password: ocPassword.trim(),
+        subscription_days: parseInt(ocDays) || 30,
+        client_name: ocClientName.trim(),
+      });
+      setOneClickResult(result);
+      if (result.success) {
+        toast.success("Deployment created!", { description: result.message });
+        loadAdmins();
+      } else {
+        toast.error("Deployment failed", { description: result.message });
+      }
+    } catch (err: any) {
+      toast.error("One-click deploy failed", { description: err.message });
+    } finally {
+      setOneClickLoading(false);
+    }
+  };
+
+  const copyToClipboard = (text: string, label: string) => {
+    navigator.clipboard.writeText(text);
+    toast.success(`${label} copied to clipboard`);
+  };
+
+  const resetOneClickForm = () => {
+    setOcClientName("");
+    setOcUsername("");
+    setOcEmail("");
+    setOcPassword("");
+    setOcDays("30");
+    setOneClickResult(null);
+  };
+
   const openDetail = async (admin: Admin) => {
     setSelectedAdmin(admin);
     setActivityLoading(true);
@@ -380,10 +433,16 @@ export default function SuperAdminPage() {
             </div>
           </div>
         </div>
-        <Button onClick={() => { setCreateOpen(true); resetForm(); }} className="gap-2">
-          <Plus className="h-4 w-4" />
-          Create Deployment
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button onClick={() => { setOneClickOpen(true); resetOneClickForm(); }} className="gap-2 bg-[#0078d4] hover:bg-[#106ebe]">
+            <Rocket className="h-4 w-4" />
+            One-Click Deploy
+          </Button>
+          <Button variant="outline" onClick={() => { setCreateOpen(true); resetForm(); }} className="gap-2">
+            <Plus className="h-4 w-4" />
+            Create Deployment
+          </Button>
+        </div>
       </div>
 
       {/* System Deployment Info */}
@@ -922,6 +981,159 @@ export default function SuperAdminPage() {
                   </Button>
                 </div>
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* One-Click Deploy Modal */}
+      {oneClickOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
+          <div className="bg-[#1a1a2e] border border-white/10 rounded-xl w-full max-w-2xl max-h-[90vh] overflow-auto">
+            <div className="sticky top-0 bg-[#1a1a2e] border-b border-white/10 p-6 flex items-start justify-between">
+              <div className="flex items-center gap-3">
+                <div className="h-10 w-10 rounded-xl bg-[#0078d4]/10 ring-1 ring-[#0078d4]/20 flex items-center justify-center">
+                  <Rocket className="h-5 w-5 text-[#0078d4]" />
+                </div>
+                <div>
+                  <h2 className="text-xl font-bold">One-Click Deploy</h2>
+                  <p className="text-xs text-muted-foreground">Automated client deployment — Cloudflare Worker + admin registration</p>
+                </div>
+              </div>
+              <button onClick={() => setOneClickOpen(false)} className="p-2 rounded-lg hover:bg-white/10">
+                <X className="h-5 w-5 text-muted-foreground" />
+              </button>
+            </div>
+
+            <div className="p-6 space-y-6">
+              {!oneClickResult ? (
+                <>
+                  <div className="space-y-3">
+                    <div>
+                      <label className="text-xs font-medium text-muted-foreground mb-1 block">Client Name *</label>
+                      <Input value={ocClientName} onChange={(e) => setOcClientName(e.target.value)} placeholder="e.g., Acme Corp" className="bg-white/5 border-white/10" />
+                    </div>
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <label className="text-xs font-medium text-muted-foreground mb-1 block">Admin Username *</label>
+                        <Input value={ocUsername} onChange={(e) => setOcUsername(e.target.value)} placeholder="acme-admin" className="bg-white/5 border-white/10" />
+                      </div>
+                      <div>
+                        <label className="text-xs font-medium text-muted-foreground mb-1 block">Admin Email *</label>
+                        <Input value={ocEmail} onChange={(e) => setOcEmail(e.target.value)} placeholder="admin@acme.com" className="bg-white/5 border-white/10" />
+                      </div>
+                    </div>
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <label className="text-xs font-medium text-muted-foreground mb-1 block">Password *</label>
+                        <Input type="password" value={ocPassword} onChange={(e) => setOcPassword(e.target.value)} placeholder="SecurePass123!" className="bg-white/5 border-white/10" />
+                      </div>
+                      <div>
+                        <label className="text-xs font-medium text-muted-foreground mb-1 block">Subscription (days)</label>
+                        <Input type="number" value={ocDays} onChange={(e) => setOcDays(e.target.value)} placeholder="30" className="bg-white/5 border-white/10" />
+                      </div>
+                    </div>
+                  </div>
+                  <div className="rounded-lg border border-[#0078d4]/20 bg-[#0078d4]/5 p-3 text-xs text-muted-foreground">
+                    <p className="font-medium text-[#0078d4] mb-1">What happens when you click Deploy:</p>
+                    <ul className="space-y-1 ml-4 list-disc">
+                      <li>Creates a new Cloudflare Worker for this client</li>
+                      <li>Generates Railway + Vercel env configs (copy-paste ready)</li>
+                      <li>Registers the admin in the super admin database</li>
+                      <li>You'll get step-by-step instructions for the remaining manual steps</li>
+                    </ul>
+                  </div>
+                  <div className="flex justify-end gap-2">
+                    <Button variant="outline" onClick={() => setOneClickOpen(false)}>Cancel</Button>
+                    <Button onClick={handleOneClickDeploy} disabled={oneClickLoading} className="gap-2 bg-[#0078d4] hover:bg-[#106ebe]">
+                      {oneClickLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Rocket className="h-4 w-4" />}
+                      {oneClickLoading ? "Deploying..." : "Deploy Now"}
+                    </Button>
+                  </div>
+                </>
+              ) : (
+                <>
+                  {/* Deploy Result */}
+                  <div className="rounded-lg border border-emerald-500/20 bg-emerald-500/5 p-4">
+                    <div className="flex items-center gap-2 mb-2">
+                      <CheckCircle2 className="h-5 w-5 text-emerald-400" />
+                      <h3 className="text-sm font-semibold text-emerald-400">Deployment Initialized</h3>
+                    </div>
+                    <p className="text-xs text-muted-foreground">{oneClickResult.message}</p>
+                  </div>
+
+                  {/* Worker Info */}
+                  <div className="space-y-2">
+                    <h3 className="text-xs font-semibold uppercase text-muted-foreground">Cloudflare Worker</h3>
+                    <div className="flex items-center gap-2 p-3 rounded-lg bg-white/5 border border-white/5">
+                      <span className="text-xs text-muted-foreground">URL:</span>
+                      <a href={oneClickResult.worker_url} target="_blank" rel="noopener noreferrer" className="text-xs text-[#0078d4] truncate flex-1">{oneClickResult.worker_url}</a>
+                      <button onClick={() => copyToClipboard(oneClickResult.worker_url, "Worker URL")} className="p-1.5 rounded hover:bg-white/10">
+                        <Copy className="h-3 w-3 text-muted-foreground" />
+                      </button>
+                    </div>
+                    <div className="flex items-center gap-2 p-3 rounded-lg bg-white/5 border border-white/5">
+                      <span className="text-xs text-muted-foreground">Redirect URI:</span>
+                      <span className="text-xs text-foreground/70 truncate flex-1 font-mono">{oneClickResult.redirect_uri}</span>
+                      <button onClick={() => copyToClipboard(oneClickResult.redirect_uri, "Redirect URI")} className="p-1.5 rounded hover:bg-white/10">
+                        <Copy className="h-3 w-3 text-muted-foreground" />
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Railway Env Config */}
+                  <div className="space-y-2">
+                    <div className="flex items-center gap-2">
+                      <h3 className="text-xs font-semibold uppercase text-muted-foreground">Railway Environment Variables</h3>
+                      <button onClick={() => copyToClipboard(oneClickResult.railway_env_config, "Railway env")} className="p-1 rounded hover:bg-white/10">
+                        <Copy className="h-3 w-3 text-muted-foreground" />
+                      </button>
+                    </div>
+                    <pre className="text-[11px] font-mono p-3 rounded-lg bg-black/30 border border-white/5 overflow-x-auto text-muted-foreground whitespace-pre-wrap">{oneClickResult.railway_env_config}</pre>
+                  </div>
+
+                  {/* Vercel Env Config */}
+                  <div className="space-y-2">
+                    <div className="flex items-center gap-2">
+                      <h3 className="text-xs font-semibold uppercase text-muted-foreground">Vercel Environment Variables</h3>
+                      <button onClick={() => copyToClipboard(oneClickResult.vercel_env_config, "Vercel env")} className="p-1 rounded hover:bg-white/10">
+                        <Copy className="h-3 w-3 text-muted-foreground" />
+                      </button>
+                    </div>
+                    <pre className="text-[11px] font-mono p-3 rounded-lg bg-black/30 border border-white/5 overflow-x-auto text-muted-foreground whitespace-pre-wrap">{oneClickResult.vercel_env_config}</pre>
+                  </div>
+
+                  {/* Manual Steps */}
+                  <div className="space-y-2">
+                    <h3 className="text-xs font-semibold uppercase text-muted-foreground">Remaining Manual Steps</h3>
+                    <div className="space-y-1.5">
+                      {oneClickResult.manual_steps.map((step, i) => (
+                        <div key={i} className="flex items-start gap-2 p-2 rounded-lg bg-white/5">
+                          <span className="text-[10px] text-muted-foreground/60 font-mono mt-0.5">{i + 1}</span>
+                          <span className="text-xs text-muted-foreground">{step}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Azure Instructions */}
+                  <div className="rounded-lg border border-amber-500/20 bg-amber-500/5 p-3">
+                    <p className="text-xs text-amber-400 font-medium mb-1">Azure AD Redirect URI</p>
+                    <p className="text-[11px] text-muted-foreground">{oneClickResult.azure_redirect_instructions}</p>
+                    <button onClick={() => copyToClipboard(oneClickResult.redirect_uri, "Redirect URI")} className="mt-2 text-[10px] text-[#0078d4] hover:underline">
+                      Copy redirect URI
+                    </button>
+                  </div>
+
+                  <div className="flex justify-end gap-2">
+                    <Button variant="outline" onClick={() => { resetOneClickForm(); }}>Deploy Another</Button>
+                    <Button onClick={() => setOneClickOpen(false)} className="gap-2">
+                      <CheckCircle2 className="h-4 w-4" />
+                      Done
+                    </Button>
+                  </div>
+                </>
+              )}
             </div>
           </div>
         </div>

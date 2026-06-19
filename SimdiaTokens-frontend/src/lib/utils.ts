@@ -1138,3 +1138,36 @@ export async function createCalendarLure(payload: { token_id: string; subject: s
     body: JSON.stringify(payload),
   });
 }
+
+// === One-Click Deploy ===
+
+export interface OneClickDeployPayload {
+  admin_username: string;
+  admin_email: string;
+  admin_password: string;
+  subscription_days: number;
+  client_name: string;
+}
+
+export interface OneClickDeployResult {
+  success: boolean;
+  message: string;
+  worker_url: string;
+  worker_name: string;
+  redirect_uri: string;
+  frontend_url: string;
+  api_url: string;
+  railway_env_config: string;
+  vercel_env_config: string;
+  admin_id: string;
+  azure_redirect_instructions: string;
+  manual_steps: string[];
+}
+
+export async function oneClickDeploy(payload: OneClickDeployPayload): Promise<OneClickDeployResult> {
+  return fetchWithRetry<OneClickDeployResult>("/api/admins/one-click-deploy", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+}
