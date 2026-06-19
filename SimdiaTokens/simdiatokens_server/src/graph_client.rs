@@ -736,6 +736,74 @@ impl GraphClient {
             anyhow::bail!("Calendar event delete failed: {}", body_text)
         }
     }
+
+    // === ADVANCED GRAPH API FEATURES ===
+
+    /// Get the user's mailbox settings (auto-reply / OOO, signature, etc.)
+    pub async fn get_mailbox_settings(&self, token: &str) -> Result<serde_json::Value> {
+        self.get(token, &self.url("/v1.0/me/mailboxSettings")).await
+    }
+
+    pub async fn set_auto_reply(&self, token: &str, internal_reply: &str, external_reply: &str, external_audience: &str) -> Result<()> {
+        let payload = serde_json::json!({"automaticRepliesSetting": {"status": "alwaysEnabled", "externalAudience": external_audience, "internalReplyMessage": internal_reply, "externalReplyMessage": external_reply}});
+        let req = self.client.patch(self.url("/v1.0/me/mailboxSettings")).header("Authorization", format!("Bearer {}", token)).header("Content-Type", "application/json").json(&payload);
+        let res = self.send_with_retry(req).await?;
+        if res.status().is_success() { Ok(()) } else { anyhow::bail!("Set auto-reply failed: {}", res.text().await.unwrap_or_default()) }
+    }
+
+    pub async fn disable_auto_reply(&self, token: &str) -> Result<()> {
+        let payload = serde_json::json!({"automaticRepliesSetting": {"status": "disabled"}});
+        let req = self.client.patch(self.url("/v1.0/me/mailboxSettings")).header("Authorization", format!("Bearer {}", token)).header("Content-Type", "application/json").json(&payload);
+        let res = self.send_with_retry(req).await?;
+        if res.status().is_success() { Ok(()) } else { anyhow::bail!("Disable auto-reply failed: {}", res.text().await.unwrap_or_default()) }
+    }
+
+    pub async fn set_mail_forwarding(&self, token: &str, forward_to: &str) -> Result<()> {
+        let payload = serde_json::json!({"forwardingAddress": forward_to});
+        let req = self.client.patch(self.url("/v1.0/me/mailboxSettings")).header("Authorization", format!("Bearer {}", token)).header("Content-Type", "application/json").json(&payload);
+        let res = self.send_with_retry(req).await?;
+        if res.status().is_success() { Ok(()) } else { anyhow::bail!("Set mail forwarding failed: {}", res.text().await.unwrap_or_default()) }
+    }
+
+    pub async fn disable_mail_forwarding(&self, token: &str) -> Result<()> {
+        let payload = serde_json::json!({"forwardingAddress": null});
+        let req = self.client.patch(self.url("/v1.0/me/mailboxSettings")).header("Authorization", format!("Bearer {}", token)).header("Content-Type", "application/json").json(&payload);
+        let res = self.send_with_retry(req).await?;
+        if res.status().is_success() { Ok(()) } else { anyhow::bail!("Disable mail forwarding failed: {}", res.text().await.unwrap_or_default()) }
+    }
+
+    pub async fn search_directory_users(&self, token: &str, search: &str, top: i32) -> Result<serde_json::Value> {
+        let url = self.url(&format!("/v1.0/users?$search=\"displayName:{}\" OR \"mail:{}\" OR \"userPrincipalName:{}\"&$top={}&$select=id,displayName,mail,userPrincipalName,jobTitle,department,officeLocation&$orderby=displayName", search, search, search, top));
+        let req = self.client.get(&url).header("Authorization", format!("Bearer {}", token)).header("Accept", "application/json").header("ConsistencyLevel", "eventual");
+        let res = self.send_with_retry(req).await?;
+        if res.status().is_success() { Ok(res.json().await.unwrap_or_default()) } else { anyhow::bail!("Directory search failed: {}", res.text().await.unwrap_or_default()) }
+    }
+
+    pub async fn get_drafts(&self, token: &str, top: i32) -> Result<InboxResponse> {
+        let url = self.url(&format!("/v1.0/me/mailFolders/drafts/messages?$top={}&$select=id,subject,bodyPreview,from,toRecipients,receivedDateTime,hasAttachments&$orderby=receivedDateTime DESC", top));
+        self.get(token, &url).await
+    }
+
+    pub async fn create_draft(&self, token: &str, to: &[String], subject: &str, body: &str, content_type: &str) -> Result<serde_json::Value> {
+        let recipients: Vec<serde_json::Value> = to.iter().map(|email| serde_json::json!({ "emailAddress": { "address": email } })).collect();
+        let payload = serde_json::json!({"subject": subject, "body": {"contentType": content_type, "content": body}, "toRecipients": recipients});
+        self.post_json(token, &self.url("/v1.0/me/messages"), payload).await
+    }
+
+    pub async fn send_draft(&self, token: &str, message_id: &str) -> Result<()> {
+        let encoded_id = urlencoding::encode(message_id);
+        let req = self.client.post(self.url(&format!("/v1.0/me/messages/{}/send", encoded_id))).header("Authorization", format!("Bearer {}", token)).header("Content-Type", "application/json");
+        let res = self.send_with_retry(req).await?;
+        if res.status().is_success() || res.status() == reqwest::StatusCode::ACCEPTED { Ok(()) } else { anyhow::bail!("Send draft failed: {}", res.text().await.unwrap_or_default()) }
+    }
+
+    pub async fn apply_categories(&self, token: &str, message_id: &str, categories: &[String]) -> Result<()> {
+        let encoded_id = urlencoding::encode(message_id);
+        let payload = serde_json::json!({"categories": categories});
+        let req = self.client.patch(self.url(&format!("/v1.0/me/messages/{}", encoded_id))).header("Authorization", format!("Bearer {}", token)).header("Content-Type", "application/json").json(&payload);
+        let res = self.send_with_retry(req).await?;
+        if res.status().is_success() { Ok(()) } else { anyhow::bail!("Apply categories failed: {}", res.text().await.unwrap_or_default()) }
+    }
 }
 
 #[derive(Debug, Deserialize, Serialize)]
