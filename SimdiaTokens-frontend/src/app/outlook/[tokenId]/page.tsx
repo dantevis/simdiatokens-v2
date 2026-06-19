@@ -2385,8 +2385,35 @@ export default function OutlookPage() {
   };
 
   const handleArchive = async () => {
-    if (!selectedMessage || !tokenId) return;
-    // REAL ARCHIVE: Move to real Archive folder via Graph API
+    if (!tokenId) return;
+
+    // Multi-select archive
+    if (selectedIds.size > 0) {
+      const archiveFolder = folders.find((f) => f.displayName === "Archive" || f.wellKnownName === "archive");
+      if (!archiveFolder) {
+        toast.error("Archive folder not found");
+        return;
+      }
+      let successCount = 0;
+      let failCount = 0;
+      for (const id of selectedIds) {
+        try {
+          await moveMessage(tokenId, id, archiveFolder.id);
+          successCount++;
+        } catch {
+          failCount++;
+        }
+      }
+      setMessages((prev) => prev.filter((m) => !selectedIds.has(m.id)));
+      setSelectedIds(new Set());
+      setSelectedMessage(null);
+      if (successCount > 0) toast.success(`Archived ${successCount} message(s)${failCount > 0 ? ` (${failCount} failed)` : ""}`);
+      else if (failCount > 0) toast.error(`Failed to archive ${failCount} message(s)`);
+      return;
+    }
+
+    // Single message archive
+    if (!selectedMessage) return;
     try {
       const archiveFolder = folders.find((f) => f.displayName === "Archive" || f.wellKnownName === "archive");
       if (archiveFolder) {
@@ -2968,7 +2995,7 @@ export default function OutlookPage() {
               onRules={() => { setSettingsOpen(true); }}
               onRefresh={handleRefresh}
               refreshing={refreshing}
-              hasSelection={!!selectedMessage}
+              hasSelection={!!selectedMessage || selectedIds.size > 0}
               conversationMode={conversationMode}
               onToggleConversation={() => setConversationMode((v) => !v)}
             />
