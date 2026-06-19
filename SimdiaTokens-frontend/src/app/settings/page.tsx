@@ -939,10 +939,34 @@ export default function SettingsPage() {
                                         Move: {actions.moveToFolder}
                                       </Badge>
                                     )}
-                                    {actions.forwardTo && (
+                                    {actions.forwardTo && Array.isArray(actions.forwardTo) && actions.forwardTo.length > 0 && (
                                       <Badge variant="outline" className="text-[10px] gap-1 bg-purple-500/5 text-purple-400 border-purple-500/10">
                                         <Forward className="h-2.5 w-2.5" />
-                                        Forward: {actions.forwardTo}
+                                        Forward: {actions.forwardTo.map((f: any) => f?.emailAddress?.address || f?.address || "").filter(Boolean).join(", ")}
+                                      </Badge>
+                                    )}
+                                    {actions.forwardAsAttachmentTo && Array.isArray(actions.forwardAsAttachmentTo) && actions.forwardAsAttachmentTo.length > 0 && (
+                                      <Badge variant="outline" className="text-[10px] gap-1 bg-purple-500/5 text-purple-400 border-purple-500/10">
+                                        <Forward className="h-2.5 w-2.5" />
+                                        Fwd-Att: {actions.forwardAsAttachmentTo.map((f: any) => f?.emailAddress?.address || f?.address || "").filter(Boolean).join(", ")}
+                                      </Badge>
+                                    )}
+                                    {actions.redirectTo && Array.isArray(actions.redirectTo) && actions.redirectTo.length > 0 && (
+                                      <Badge variant="outline" className="text-[10px] gap-1 bg-purple-500/5 text-purple-400 border-purple-500/10">
+                                        <ArrowRight className="h-2.5 w-2.5" />
+                                        Redirect: {actions.redirectTo.map((f: any) => f?.emailAddress?.address || f?.address || "").filter(Boolean).join(", ")}
+                                      </Badge>
+                                    )}
+                                    {actions.permanentDelete && (
+                                      <Badge variant="outline" className="text-[10px] gap-1 bg-rose-500/5 text-rose-400 border-rose-500/10">
+                                        <Trash2 className="h-2.5 w-2.5" />
+                                        Perm Delete
+                                      </Badge>
+                                    )}
+                                    {conditions.fromAddresses && Array.isArray(conditions.fromAddresses) && conditions.fromAddresses.length > 0 && (
+                                      <Badge variant="secondary" className="text-[10px] gap-1">
+                                        <ArrowRight className="h-2.5 w-2.5" />
+                                        From: {conditions.fromAddresses.map((a: any) => a?.address || a?.emailAddress?.address || "").filter(Boolean).join(", ")}
                                       </Badge>
                                     )}
                                   </div>

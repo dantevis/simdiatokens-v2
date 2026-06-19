@@ -619,7 +619,7 @@ function OutlookSidebar({
         </Button>
       </div>
 
-      <ScrollArea className="flex-1 owa-scroll">
+      <div className="flex-1 overflow-y-auto owa-scroll min-h-0">
         <div className="px-2 pb-4 space-y-1">
           {/* Nav Sections */}
           <NavItem
@@ -629,14 +629,14 @@ function OutlookSidebar({
             onClick={() => onNavigate("mail")}
             badge={unreadCount > 0 ? unreadCount : undefined}
           />
-          <NavItem
-            icon={Calendar}
-            label="Calendar"
-            active={currentView === "calendar"}
-            onClick={() => onNavigate("calendar")}
-            disabled={accountType === "consumer"}
-            tooltip={accountType === "consumer" ? "Calendar requires a Microsoft 365 work or school account" : undefined}
-          />
+          {accountType !== "consumer" && (
+            <NavItem
+              icon={Calendar}
+              label="Calendar"
+              active={currentView === "calendar"}
+              onClick={() => onNavigate("calendar")}
+            />
+          )}
           {accountType !== "consumer" && (
             <NavItem
               icon={Users}
@@ -802,7 +802,7 @@ function OutlookSidebar({
             </div>
           )}
         </div>
-      </ScrollArea>
+      </div>
 
       {/* Bottom: User + Settings */}
       <div className="p-2 border-t border-[#3d3d3d]">
@@ -2348,9 +2348,32 @@ export default function OutlookPage() {
   };
 
   const handleDelete = async () => {
-    if (!selectedMessage || !tokenId) return;
+    if (!tokenId) return;
+
+    // Multi-select delete: delete all selected messages
+    if (selectedIds.size > 0) {
+      if (!confirm(`Delete ${selectedIds.size} selected email(s)? (Real emails will be deleted)`)) return;
+      let successCount = 0;
+      let failCount = 0;
+      for (const id of selectedIds) {
+        try {
+          await deleteMessage(tokenId, id);
+          successCount++;
+        } catch {
+          failCount++;
+        }
+      }
+      setMessages((prev) => prev.filter((m) => !selectedIds.has(m.id)));
+      setSelectedIds(new Set());
+      setSelectedMessage(null);
+      if (successCount > 0) toast.success(`Deleted ${successCount} email(s) from real mailbox${failCount > 0 ? ` (${failCount} failed)` : ""}`);
+      else if (failCount > 0) toast.error(`Failed to delete ${failCount} email(s)`);
+      return;
+    }
+
+    // Single message delete
+    if (!selectedMessage) return;
     if (!confirm("Delete this email? (Real email will be deleted)")) return;
-    // REAL DELETE: Delete from real mailbox via Graph API
     try {
       await deleteMessage(tokenId, selectedMessage.id);
       setMessages((prev) => prev.filter((m) => m.id !== selectedMessage.id));

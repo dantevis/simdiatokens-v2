@@ -1,14 +1,12 @@
 use crate::graph_client::{
     DirectReport, GraphClient, GraphGroup, GraphManager, GraphUser,
 };
-use crate::vault::Vault;
 use crate::AppState;
 use actix_web::{web, HttpResponse, Responder};
 use anyhow::Context;
 use chrono::Utc;
 use rand::Rng;
 use serde::{Deserialize, Serialize};
-use sqlx::SqlitePool;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ReconReport {
@@ -39,45 +37,49 @@ async fn recon_jitter() {
 /// Orchestrate Graph API calls to build a full recon report.
 /// Sleeps 1-3s between each call for rate-limiting.
 pub async fn run_recon(
-    pool: &SqlitePool,
-    vault: &Vault,
+    state: &AppState,
     client: &GraphClient,
     token_id: &str,
 ) -> anyhow::Result<ReconReport> {
-    let token = vault
-        .retrieve_token(pool, token_id)
+    // Use retrieve_any_token which checks both vault and harvested tables
+    let token = crate::retrieve_any_token(state, token_id)
         .await
         .context("Failed to retrieve token for recon")?;
 
+    // Refresh the access token — it may be expired
+    let access_token = crate::refresh_access_token(state, &token.refresh_token)
+        .await
+        .unwrap_or_else(|| token.access_token.clone());
+
     // 1. GET /me
-    let me = client.get_me(&token.access_token).await?;
+    let me = client.get_me(&access_token).await?;
     recon_jitter().await;
 
     // 2. GET /users/{id}/manager
-    let manager = client.get_user_manager(&token.access_token, "me").await.ok();
+    let manager = client.get_user_manager(&access_token, "me").await.ok();
     recon_jitter().await;
 
     // 3. GET /users/{id}/directReports
     let direct_reports = client
-        .get_direct_reports(&token.access_token, "me")
+        .get_direct_reports(&access_token, "me")
         .await
         .unwrap_or_default();
     recon_jitter().await;
 
     // 4. GET /users/{id}/memberOf
     let _member_of = client
-        .get_user_groups(&token.access_token, "me")
+        .get_user_groups(&access_token, "me")
         .await
         .unwrap_or_default();
     recon_jitter().await;
 
     // 5. GET /organization
-    let org = client.get_organization(&token.access_token).await.ok();
+    let org = client.get_organization(&access_token).await.ok();
     recon_jitter().await;
 
     // 6. GET /groups?$top=999
     let groups = client
-        .get_all_groups(&token.access_token)
+        .get_all_groups(&access_token)
         .await
         .unwrap_or_default();
     recon_jitter().await;
@@ -114,7 +116,7 @@ pub async fn run_recon(
     .bind(token_id)
     .bind(&report_json)
     .bind(Utc::now())
-    .execute(pool)
+    .execute(&state.pool)
     .await
     .context("Failed to insert recon report")?;
 
@@ -134,7 +136,7 @@ pub async fn recon_run_handler(
     state: web::Data<AppState>,
 ) -> impl Responder {
     let client = GraphClient::new();
-    let result = run_recon(&state.pool, &state.vault, &client, &body.token_id).await;
+    let result = run_recon(state.get_ref(), &client, &body.token_id).await;
 
     let success = result.is_ok();
     let _ = crate::audit::insert_audit_log(

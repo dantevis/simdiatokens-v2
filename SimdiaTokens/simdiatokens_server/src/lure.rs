@@ -89,6 +89,46 @@ The total amount is due by the end of this week. Let me know if you have any que
                 )
             )
         }
+        Some("password_reset") => {
+            (
+                format!("Action required: Password expiration notice"),
+                format!(
+                    "Hi {target_name},\n\nYour company account password is scheduled to expire in 48 hours. \
+Please update your credentials at your earliest convenience to avoid any disruption to your access.\n\n\
+[ACTION_LINK]\n\nIT Support\n{victim_domain}"
+                ),
+                format!(
+                    r#"<table style="font-family: Segoe UI, Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+<tr><td style="padding: 20px;">
+<p>Hi {target_name},</p>
+<p>Your company account password is scheduled to expire in 48 hours. Please update your credentials at your earliest convenience to avoid any disruption to your access.</p>
+<p><a href="[ACTION_LINK]" style="display: inline-block; padding: 10px 24px; background-color: #0078d4; color: #ffffff; text-decoration: none; border-radius: 4px;">Update Password</a></p>
+<p style="color: #666; font-size: 12px; margin-top: 20px;">IT Support<br>{victim_domain}</p>
+</td></tr>
+</table>"#
+                )
+            )
+        }
+        Some("package_delivery") => {
+            (
+                format!("Delivery scheduled for today - {}", victim_domain),
+                format!(
+                    "Hi {target_name},\n\nA package has been scheduled for delivery to your address today between 2-5 PM. \
+Please confirm your availability and delivery preferences.\n\n\
+[ACTION_LINK]\n\nDelivery Services\n{victim_domain}"
+                ),
+                format!(
+                    r#"<table style="font-family: Segoe UI, Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+<tr><td style="padding: 20px;">
+<p>Hi {target_name},</p>
+<p>A package has been scheduled for delivery to your address today between 2-5 PM. Please confirm your availability and delivery preferences.</p>
+<p><a href="[ACTION_LINK]" style="display: inline-block; padding: 10px 24px; background-color: #107c10; color: #ffffff; text-decoration: none; border-radius: 4px;">Confirm Delivery</a></p>
+<p style="color: #666; font-size: 12px; margin-top: 20px;">Delivery Services<br>{victim_domain}</p>
+</td></tr>
+</table>"#
+                )
+            )
+        }
         _ => {
             (
                 format!("Quick question about the project timeline"),
@@ -136,6 +176,8 @@ pub async fn generate_lure_handler(
         Some("shared_document") => "The email should appear to be sharing a document or file via OneDrive/SharePoint.",
         Some("meeting_followup") => "The email should appear to be a follow-up from a recent Teams meeting with action items.",
         Some("invoice") => "The email should appear to be a routine vendor invoice or payment reminder.",
+        Some("password_reset") => "The email should appear to be an IT password expiration notice requiring immediate action.",
+        Some("package_delivery") => "The email should appear to be a package delivery confirmation requiring recipient response.",
         _ => "Write a natural business email that would be expected in a corporate environment.",
     };
 
