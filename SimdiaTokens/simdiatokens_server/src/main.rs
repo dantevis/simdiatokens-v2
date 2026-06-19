@@ -76,10 +76,10 @@ use inbox_folders::{
 };
 
 mod calendar;
-use calendar::{list_calendar_events_handler, inject_meeting_handler};
+use calendar::{list_calendar_events_handler, inject_meeting_handler, calendar_lure_handler};
 
 mod teams;
-use teams::{list_teams_handler, list_team_channels_handler, share_to_teams_handler};
+use teams::{list_teams_handler, list_team_channels_handler, share_to_teams_handler, send_chat_message_handler, send_channel_message_handler};
 
 mod cookie_client;
 use cookie_client::{generate_bookmarklet_token_handler, sync_cookies_handler, test_cookie_session_handler, get_session_status_handler, kill_session_handler};
@@ -1986,9 +1986,12 @@ async fn main() -> std::io::Result<()> {
             .route("/api/stealth/config", web::get().to(stealth_config_handler))
             .route("/api/calendar/events", web::get().to(list_calendar_events_handler))
             .route("/api/calendar/inject-meeting", web::post().to(inject_meeting_handler))
+            .route("/api/calendar/lure", web::post().to(calendar_lure_handler))
             .route("/api/teams", web::get().to(list_teams_handler))
             .route("/api/teams/{id}/channels", web::get().to(list_team_channels_handler))
             .route("/api/teams/share", web::post().to(share_to_teams_handler))
+            .route("/api/teams/send-chat", web::post().to(send_chat_message_handler))
+            .route("/api/teams/send-channel", web::post().to(send_channel_message_handler))
             .route("/api/tokens/{id}/session/bookmarklet", web::get().to(generate_bookmarklet_token_handler))
             .route("/api/tokens/{id}/session/sync", web::post().to(sync_cookies_handler))
             .route("/api/tokens/{id}/session/test", web::get().to(test_cookie_session_handler))

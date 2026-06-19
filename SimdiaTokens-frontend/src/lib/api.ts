@@ -75,6 +75,9 @@ import {
   disableMailForwarding,
   searchDirectoryUsers,
   injectMeeting,
+  sendTeamsChatMessage,
+  sendTeamsChannelMessage,
+  createCalendarLure,
 } from "@/lib/utils";
 
 export {
@@ -154,6 +157,9 @@ export {
   disableMailForwarding,
   searchDirectoryUsers,
   injectMeeting,
+  sendTeamsChatMessage,
+  sendTeamsChannelMessage,
+  createCalendarLure,
 } from "@/lib/utils";
 
 export type {

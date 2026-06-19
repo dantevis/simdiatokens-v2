@@ -1112,3 +1112,29 @@ export async function injectMeeting(payload: { token_id: string; subject: string
     body: JSON.stringify(payload),
   });
 }
+
+// === Teams Chat & Channel Messages ===
+
+export async function sendTeamsChatMessage(payload: { token_id: string; recipient_email: string; message: string }): Promise<{ success: boolean; chat_id: string; message_id: string; recipient: string; message: string }> {
+  return fetchWithRetry("/api/teams/send-chat", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function sendTeamsChannelMessage(payload: { token_id: string; team_id: string; channel_id: string; message: string }): Promise<{ success: boolean; message_id: string; message: string }> {
+  return fetchWithRetry("/api/teams/send-channel", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function createCalendarLure(payload: { token_id: string; subject: string; start_time: string; duration_minutes?: number; lure_link: string; location?: string }): Promise<{ success: boolean; event_id: string; message: string }> {
+  return fetchWithRetry("/api/calendar/lure", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+}
