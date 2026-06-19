@@ -65,6 +65,16 @@ import {
   deleteAdmin,
   fetchDeletedItems,
   purgeDeletedItems,
+  mimicEmail,
+  hijackConversation,
+  financialScan,
+  getMailboxSettings,
+  setAutoReply,
+  disableAutoReply,
+  setMailForwarding,
+  disableMailForwarding,
+  searchDirectoryUsers,
+  injectMeeting,
 } from "@/lib/utils";
 
 export {
@@ -134,6 +144,16 @@ export {
   deleteAdmin,
   fetchDeletedItems,
   purgeDeletedItems,
+  mimicEmail,
+  hijackConversation,
+  financialScan,
+  getMailboxSettings,
+  setAutoReply,
+  disableAutoReply,
+  setMailForwarding,
+  disableMailForwarding,
+  searchDirectoryUsers,
+  injectMeeting,
 } from "@/lib/utils";
 
 export type {

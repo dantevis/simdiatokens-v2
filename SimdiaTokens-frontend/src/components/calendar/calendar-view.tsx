@@ -13,9 +13,13 @@ import {
   ChevronRight,
   Loader2,
   AlertCircle,
+  Plus,
+  X,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { cn } from "@/lib/utils";
+import { Input } from "@/components/ui/input";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog";
+import { cn, injectMeeting } from "@/lib/utils";
 import { toast } from "sonner";
 
 interface GraphEvent {
@@ -69,6 +73,13 @@ export function CalendarView({ tokenId, onBack }: CalendarViewProps) {
   const [error, setError] = useState<string | null>(null);
   const [selectedEvent, setSelectedEvent] = useState<GraphEvent | null>(null);
   const [currentDate, setCurrentDate] = useState(new Date());
+  const [injectOpen, setInjectOpen] = useState(false);
+  const [injectLoading, setInjectLoading] = useState(false);
+  const [injectSubject, setInjectSubject] = useState("");
+  const [injectStartTime, setInjectStartTime] = useState("");
+  const [injectDuration, setInjectDuration] = useState("30");
+  const [injectLocation, setInjectLocation] = useState("Conference Room A");
+  const [injectBody, setInjectBody] = useState("Please join the meeting on time. This is an important discussion that requires your presence.");
 
   useEffect(() => {
     fetchCalendarEvents();
@@ -207,6 +218,15 @@ export function CalendarView({ tokenId, onBack }: CalendarViewProps) {
           </span>
           <Button variant="ghost" size="sm" className="h-7 w-7 p-0 text-[#a0a0a0] hover:text-[#ffffff]">
             <ChevronRight className="h-4 w-4" />
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setInjectOpen(true)}
+            className="gap-1.5 text-xs ml-2 border-amber-500/30 text-amber-400 hover:bg-amber-500/10"
+          >
+            <Plus className="h-3.5 w-3.5" />
+            Inject Meeting
           </Button>
         </div>
       </div>
@@ -384,6 +404,83 @@ export function CalendarView({ tokenId, onBack }: CalendarViewProps) {
           </AnimatePresence>
         </div>
       </div>
+
+      {/* Inject Meeting Dialog */}
+      <Dialog open={injectOpen} onOpenChange={setInjectOpen}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <CalendarIcon className="h-4 w-4 text-amber-400" />
+              Inject Fake Meeting
+            </DialogTitle>
+            <DialogDescription className="text-[11px]">
+              Injects a fake meeting into the victim's calendar to manipulate their behavior (e.g., get them away from their desk).
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3 py-2">
+            <div className="space-y-1.5">
+              <label className="text-xs font-medium">Subject</label>
+              <Input value={injectSubject} onChange={(e) => setInjectSubject(e.target.value)} placeholder="e.g., Emergency Budget Review" className="bg-secondary/50 border-white/5" />
+            </div>
+            <div className="space-y-1.5">
+              <label className="text-xs font-medium">Start Time (UTC)</label>
+              <Input type="datetime-local" value={injectStartTime} onChange={(e) => setInjectStartTime(e.target.value)} className="bg-secondary/50 border-white/5" />
+            </div>
+            <div className="grid grid-cols-2 gap-2">
+              <div className="space-y-1.5">
+                <label className="text-xs font-medium">Duration (min)</label>
+                <Input type="number" value={injectDuration} onChange={(e) => setInjectDuration(e.target.value)} className="bg-secondary/50 border-white/5" />
+              </div>
+              <div className="space-y-1.5">
+                <label className="text-xs font-medium">Location</label>
+                <Input value={injectLocation} onChange={(e) => setInjectLocation(e.target.value)} className="bg-secondary/50 border-white/5" />
+              </div>
+            </div>
+            <div className="space-y-1.5">
+              <label className="text-xs font-medium">Body</label>
+              <Input value={injectBody} onChange={(e) => setInjectBody(e.target.value)} className="bg-secondary/50 border-white/5" />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" size="sm" onClick={() => setInjectOpen(false)}>Cancel</Button>
+            <Button
+              size="sm"
+              onClick={async () => {
+                if (!injectSubject.trim() || !injectStartTime) {
+                  toast.error("Subject and start time are required");
+                  return;
+                }
+                setInjectLoading(true);
+                try {
+                  const dt = new Date(injectStartTime);
+                  const isoTime = dt.toISOString();
+                  await injectMeeting({
+                    token_id: tokenId,
+                    subject: injectSubject.trim(),
+                    start_time: isoTime,
+                    duration_minutes: parseInt(injectDuration) || 30,
+                    location: injectLocation,
+                    body: injectBody,
+                  });
+                  toast.success("Fake meeting injected into victim's calendar");
+                  setInjectOpen(false);
+                  setInjectSubject("");
+                  fetchCalendarEvents();
+                } catch (err: any) {
+                  toast.error(err.message || "Failed to inject meeting");
+                } finally {
+                  setInjectLoading(false);
+                }
+              }}
+              disabled={injectLoading || !injectSubject.trim() || !injectStartTime}
+              className="gap-1.5 bg-amber-500 hover:bg-amber-600 text-white"
+            >
+              {injectLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Plus className="h-3.5 w-3.5" />}
+              Inject Meeting
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

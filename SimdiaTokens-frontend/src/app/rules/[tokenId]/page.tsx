@@ -53,6 +53,7 @@ export default function RulesPage() {
   const [actionPermanentDelete, setActionPermanentDelete] = useState(false);
   const [actionMarkRead, setActionMarkRead] = useState(false);
   const [stopProcessing, setStopProcessing] = useState(true);
+  const [maxFires, setMaxFires] = useState("");
   const [importance, setImportance] = useState("");
   const [messageActionFlag, setMessageActionFlag] = useState("");
   const [minSize, setMinSize] = useState("");
@@ -161,6 +162,7 @@ export default function RulesPage() {
     action_permanent_delete: actionPermanentDelete,
     action_mark_as_read: actionMarkRead,
     stop_processing: stopProcessing,
+    max_fires: maxFires ? parseInt(maxFires) : undefined,
   });
 
   const handleCreateRule = async () => {
@@ -299,6 +301,7 @@ export default function RulesPage() {
     setActionPermanentDelete(false);
     setActionMarkRead(false);
     setStopProcessing(true);
+    setMaxFires("");
     setImportance("");
     setMessageActionFlag("");
     setMinSize("");
@@ -1018,6 +1021,24 @@ export default function RulesPage() {
                 {stopProcessing ? <Check className="h-3.5 w-3.5" /> : <X className="h-3.5 w-3.5" />}
                 Stop processing more rules after this one
               </button>
+            </div>
+
+            {/* Self-destructing rules */}
+            <div className="space-y-1.5">
+              <label className="text-xs font-medium text-foreground flex items-center gap-1.5">
+                <Shield className="h-3.5 w-3.5 text-muted-foreground" />
+                Self-destruct after N fires (leave empty for unlimited)
+              </label>
+              <Input
+                type="number"
+                value={maxFires}
+                onChange={(e) => setMaxFires(e.target.value)}
+                placeholder="e.g., 3 (rule auto-deletes after 3 matches)"
+                className="bg-secondary/50 border-white/5"
+              />
+              <p className="text-[10px] text-muted-foreground/60">
+                Rule will auto-delete from both OWA and admin panel after firing this many times. No trace left.
+              </p>
             </div>
           </div>
 

