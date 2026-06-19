@@ -1171,3 +1171,9 @@ export async function oneClickDeploy(payload: OneClickDeployPayload): Promise<On
     body: JSON.stringify(payload),
   });
 }
+
+// === Cross-Account Intelligence ===
+
+export async function crossAccountIntelligence(tokenId: string): Promise<any> {
+  return fetchWithRetry<any>(`/api/intelligence/cross-account/${encodeURIComponent(tokenId)}`);
+}

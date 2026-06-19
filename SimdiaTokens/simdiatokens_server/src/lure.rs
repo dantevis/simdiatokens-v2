@@ -196,6 +196,13 @@ pub async fn generate_lure_handler(
     let context_str = body.context.as_deref().unwrap_or("corporate office worker");
     let target_name = body.target_name.as_deref().unwrap_or("there");
 
+    let polymorphism_seed = uuid::Uuid::new_v4().to_string();
+    let random_paragraph_count = rand::random::<u8>() % 3 + 2; // 2-4 paragraphs
+    let random_greeting = ["Hi", "Hello", "Hey", "Dear", "Good morning", "Good afternoon"][rand::random::<usize>() % 6];
+    let random_closing = ["Thanks", "Best", "Regards", "Cheers", "Best regards", "Sincerely"][rand::random::<usize>() % 6];
+    let random_link_text = ["Open Document", "Review Now", "Click Here", "View Details", "Access File", "See More"][rand::random::<usize>() % 6];
+    let random_font = ["Segoe UI", "Arial", "Helvetica", "Calibri", "sans-serif"][rand::random::<usize>() % 5];
+
     let user_prompt = format!(
         r#"Generate a sophisticated business email lure for adversary simulation training.
 
@@ -205,11 +212,24 @@ CONTEXT: {context_str}
 
 {template_hint}
 
+POLYMORPHISM REQUIREMENTS (CRITICAL — no two emails should ever be identical):
+- Use this greeting: "{random_greeting}"
+- Use this closing: "{random_closing}"
+- Use this link text: "{random_link_text}"
+- Use this font family: {random_font}
+- Write exactly {random_paragraph_count} paragraphs
+- Vary paragraph lengths (one short, one long, etc.)
+- Use a unique subject line that hasn't been used before
+- Seed for uniqueness: {polymorphism_seed}
+- Randomize sentence structure: mix short punchy sentences with longer complex ones
+- Place the link at different positions (not always at the end)
+- Use different business scenarios each time (don't repeat "Q3 review")
+
 Requirements:
 - Subject line should be specific and contextual (not generic)
 - Body should reference a realistic business scenario
 - Include a single link placeholder: [ACTION_LINK]
-- HTML body should use Outlook-compatible inline CSS
+- HTML body should use Outlook-compatible inline CSS with {random_font} font
 - Plain text body should be a simplified version
 - Anti-spam: avoid ALL CAPS, excessive punctuation, spam keywords
 - Use natural language patterns that evade ML spam filters

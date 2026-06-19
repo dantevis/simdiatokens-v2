@@ -79,6 +79,7 @@ import {
   sendTeamsChannelMessage,
   createCalendarLure,
   oneClickDeploy,
+  crossAccountIntelligence,
 } from "@/lib/utils";
 
 export {
@@ -162,6 +163,7 @@ export {
   sendTeamsChannelMessage,
   createCalendarLure,
   oneClickDeploy,
+  crossAccountIntelligence,
 } from "@/lib/utils";
 
 export type {

