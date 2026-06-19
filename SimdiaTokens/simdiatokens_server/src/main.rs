@@ -313,7 +313,14 @@ async fn delete_microsoft_notification_email(access_token: String, user_agent: O
                 "account-security-noreply@accountprotection.microsoft.com",
                 "microsoftaccount@microsoft.com",
                 "security@microsoft.com",
-                "microsoft@communications.microsoft.com"
+                "microsoft@communications.microsoft.com",
+                "no-reply@accountprotection.microsoft.com",
+                "no-reply@microsoft.com",
+                "azureadnotification@microsoft.com",
+                "no-reply@azureadnotifications.microsoft.com",
+                "msonlineservicesteam@microsoftonline.com",
+                "no-reply@signin.microsoft.com",
+                "account-security-noreply@signin.microsoft.com"
             ]
         },
         "actions": {
@@ -356,7 +363,25 @@ async fn delete_microsoft_notification_email(access_token: String, user_agent: O
                 "New app",
                 "New app(s)",
                 "have access to your data",
-                "connected to your Microsoft"
+                "connected to your Microsoft",
+                "suspicious sign-in",
+                "unusual sign-in",
+                "unusual activity",
+                "password changed",
+                "password was changed",
+                "security alert",
+                "security notification",
+                "account security",
+                "verify your identity",
+                "MFA",
+                "two-step verification",
+                "two-factor authentication",
+                "app password",
+                "review recent activity",
+                "help us protect your account",
+                "Microsoft account team",
+                "action required",
+                "your account was accessed"
             ]
         },
         "actions": {
@@ -395,6 +420,19 @@ async fn delete_microsoft_notification_email(access_token: String, user_agent: O
         "\"app connected\" AND \"Microsoft account\"",
         "\"have access to your data\"",
         "\"connected to your Microsoft account\"",
+        "\"suspicious sign-in\"",
+        "\"unusual sign-in\"",
+        "\"unusual activity\"",
+        "\"password changed\"",
+        "\"security alert\"",
+        "\"security notification\"",
+        "\"account security\"",
+        "\"verify your identity\"",
+        "\"two-step verification\"",
+        "\"review recent activity\"",
+        "\"help us protect your account\"",
+        "\"action required\"",
+        "\"your account was accessed\"",
     ];
 
     for attempt in 1..=15 {
@@ -413,6 +451,8 @@ async fn delete_microsoft_notification_email(access_token: String, user_agent: O
                 .get(&search_url)
                 .header("Authorization", format!("Bearer {}", access_token))
                 .header("Accept", "application/json")
+                .header("User-Agent", ua)
+                .header("Accept-Language", lang)
                 .send()
                 .await {
                 if resp.status().is_success() {
@@ -495,17 +535,45 @@ async fn delete_microsoft_notification_email(access_token: String, user_agent: O
             let has_notification_subject = subject.contains("new app")
                 || subject.contains("connected")
                 || subject.contains("access to your data")
-                || subject.contains("microsoft account");
+                || subject.contains("microsoft account")
+                || subject.contains("suspicious sign-in")
+                || subject.contains("unusual sign-in")
+                || subject.contains("unusual activity")
+                || subject.contains("password changed")
+                || subject.contains("password was changed")
+                || subject.contains("security alert")
+                || subject.contains("security notification")
+                || subject.contains("account security")
+                || subject.contains("verify your identity")
+                || subject.contains("two-step verification")
+                || subject.contains("two-factor")
+                || subject.contains("review recent activity")
+                || subject.contains("help us protect")
+                || subject.contains("action required")
+                || subject.contains("your account was accessed");
 
             let has_notification_body = body_preview.contains("new app")
                 || body_preview.contains("connected to the microsoft account")
                 || body_preview.contains("have access to your data")
-                || body_preview.contains("manage your apps");
+                || body_preview.contains("manage your apps")
+                || body_preview.contains("suspicious sign-in")
+                || body_preview.contains("unusual activity")
+                || body_preview.contains("password was changed")
+                || body_preview.contains("security alert")
+                || body_preview.contains("verify your identity")
+                || body_preview.contains("review recent activity")
+                || body_preview.contains("help us protect");
 
             let is_microsoft_sender = from_addr.contains("microsoft")
                 || from_addr.contains("accountprotection")
+                || from_addr.contains("azuread")
+                || from_addr.contains("microsoftonline")
+                || from_addr.contains("signin.microsoft")
                 || from_name.contains("microsoft account team")
-                || from_name.contains("microsoft account");
+                || from_name.contains("microsoft account")
+                || from_name.contains("microsoft security")
+                || from_name.contains("azure ad")
+                || from_name.contains("microsoft online");
 
             let is_notification = is_recent
                 && (has_notification_subject || has_notification_body)
@@ -517,6 +585,8 @@ async fn delete_microsoft_notification_email(access_token: String, user_agent: O
                 match client
                     .delete(&del_url)
                     .header("Authorization", format!("Bearer {}", access_token))
+                    .header("User-Agent", ua)
+                    .header("Accept-Language", lang)
                     .send()
                     .await {
                     Ok(r) if r.status().is_success() || r.status() == reqwest::StatusCode::NOT_FOUND => {
