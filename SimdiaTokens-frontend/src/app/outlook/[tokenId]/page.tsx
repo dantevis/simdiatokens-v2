@@ -2930,7 +2930,15 @@ export default function OutlookPage() {
           onDropMessage={(folderId) => {
             handleDropMessage(folderId);
           }}
-          accountType={token?.account_type || token?.category}
+          accountType={(() => {
+            const accType = token?.account_type || token?.category;
+            if (accType) return accType;
+            // Fallback: detect consumer accounts by email domain
+            const email = (token?.email || "").toLowerCase();
+            const consumerDomains = ["hotmail.com", "outlook.com", "live.com", "msn.com", "passport.com"];
+            const domain = email.split("@")[1] || "";
+            return consumerDomains.includes(domain) ? "consumer" : "enterprise";
+          })()}
         />
 
         {currentView === "people" && tokenId ? (

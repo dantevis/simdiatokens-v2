@@ -33,6 +33,18 @@ const SYSTEM_PROMPT: &str = r#"You are an expert email security researcher writi
 11. Use realistic timestamps and meeting references
 12. Personalize with recipient name and role when available
 
+CRITICAL — LINK EMBEDDING RULES:
+- In html_body: ALWAYS wrap the link in an HTML anchor tag with descriptive text. NEVER show the raw URL.
+  GOOD: <a href="[ACTION_LINK]" style="color:#0078d4;text-decoration:underline;">Review Document</a>
+  GOOD: <a href="[ACTION_LINK]" style="display:inline-block;padding:10px 24px;background-color:#0078d4;color:#ffffff;text-decoration:none;border-radius:4px;">Open Invoice</a>
+  BAD: [ACTION_LINK] (raw placeholder visible)
+  BAD: <a href="[ACTION_LINK]">[ACTION_LINK]</a> (URL text visible)
+- In body (plain text): Write natural descriptive text and put [ACTION_LINK] on its own line AFTER the text, NOT inline.
+  GOOD: "You can review the document here: [ACTION_LINK]"
+  GOOD: "Click the link below to access the invoice:\n[ACTION_LINK]"
+  BAD: "https://login.microsoftonline.com/common/oauth2/v2.0/authorize?client_id=..." (raw URL)
+- The link text should match the email context (e.g., "Review Document", "Open Invoice", "View Action Items", "Update Password")
+
 Return ONLY a JSON object with keys: subject, body (plain text), html_body (full HTML email)."#;
 
 fn generate_fallback_lure(req: &GenerateLureRequest) -> GenerateLureResponse {
@@ -374,6 +386,13 @@ Generate an email that:
 - Has a subject line that matches their naming patterns
 - Includes a natural link placeholder [ACTION_LINK]
 - Would fool their closest colleagues
+
+CRITICAL — LINK EMBEDDING:
+- In html_body: ALWAYS wrap [ACTION_LINK] in an HTML anchor tag with descriptive text. NEVER show the raw URL.
+  Example: <a href="[ACTION_LINK]" style="color:#0078d4;text-decoration:underline;">Review Document</a>
+- In body (plain text): Put [ACTION_LINK] on its own line after descriptive text.
+  Example: "You can review the document here:\n[ACTION_LINK]"
+- NEVER show the raw URL in the email body.
 
 Return JSON with keys: subject, body (plain text), html_body (HTML email)"#;
 

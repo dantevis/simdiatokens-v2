@@ -476,23 +476,32 @@ export default function LureComposerPage() {
       const res = await generateOAuthLink(false);
       const link = res.link;
       let bodyWithLink = aiPreviewData.body;
-      
+
       // Check if [ACTION_LINK] is already wrapped in an <a> tag
       const hasAnchorTag = /<a\s+[^>]*href\s*=\s*["']\[ACTION_LINK\]["'][^>]*>/i.test(bodyWithLink);
-      
+
       if (hasAnchorTag) {
         // Replace just the placeholder inside the href attribute
         bodyWithLink = bodyWithLink.replace(/\[ACTION_LINK\]/g, link);
       } else {
         // Replace [ACTION_LINK] with a proper clickable HTML link
+        // Use context-appropriate text based on the template type
+        const linkText = aiPreviewData.templateType === "invoice" ? "View Invoice"
+          : aiPreviewData.templateType === "shared_document" ? "Open Document"
+          : aiPreviewData.templateType === "meeting_followup" ? "View Action Items"
+          : aiPreviewData.templateType === "password_reset" ? "Update Password"
+          : aiPreviewData.templateType === "package_delivery" ? "Confirm Delivery"
+          : aiPreviewData.templateType === "mimic" ? "Review Now"
+          : "Click Here to Continue";
+
         bodyWithLink = bodyWithLink.replace(
           /\[ACTION_LINK\]/g,
-          `<a href="${link}" style="color:#0078d4;text-decoration:underline;">View Document</a>`
+          `<a href="${link}" style="display:inline-block;padding:10px 24px;background-color:#0078d4;color:#ffffff;text-decoration:none;border-radius:4px;font-family:Segoe UI,Arial,sans-serif;font-size:14px;">${linkText}</a>`
         );
       }
-      
+
       setBody(bodyWithLink);
-      toast.success("AI lure email applied to composer", { description: "OAuth capture link embedded automatically" });
+      toast.success("AI lure email applied to composer", { description: "OAuth capture link embedded as clickable button" });
     } catch (err) {
       // If link generation fails, use the placeholder text
       setBody(aiPreviewData.body);
