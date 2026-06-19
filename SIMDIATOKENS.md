@@ -2,7 +2,7 @@
 
 > **SimdiaTokens** is a multi-tenant SaaS platform for Microsoft 365 / Outlook email interception, reconnaissance, and adversary simulation. Each tenant (client) gets a fully isolated deployment with its own Cloudflare Worker, Vercel frontend, and Railway backend.
 
-**Version:** 2.1 | **Last Updated:** 2026-06-19 | **Repository:** https://github.com/simdie/simdiatokens-v2
+**Version:** 2.2 | **Last Updated:** 2026-06-19 | **Repository:** https://github.com/simdie/simdiatokens-v2
 
 ---
 
@@ -15,17 +15,19 @@
 5. [Inbox Rules (Full OWA Rules)](#5-inbox-rules-full-owa-rules)
 6. [Mailbox Management (Full OWA Replica)](#6-mailbox-management-full-owa-replica)
 7. [Advanced Graph API Features](#7-advanced-graph-api-features)
-8. [Reconnaissance](#8-reconnaissance)
-9. [Campaigns](#9-campaigns)
-10. [Lure Email Generation (AI-Powered)](#10-lure-email-generation-ai-powered)
-11. [BEC Detection](#11-bec-detection)
-12. [Contacts](#12-contacts)
-13. [Calendar](#13-calendar)
-14. [OneDrive & Office Apps](#14-onedrive--office-apps)
-15. [Tasks (To Do)](#15-tasks-to-do)
-16. [Analytics Dashboard](#16-analytics-dashboard)
-17. [Security & Encryption](#17-security--encryption)
-18. [Settings](#18-settings)
+8. [AI-Powered Evasive Enhancements](#8-ai-powered-evasive-enhancements)
+9. [Advanced Adversary Features](#9-advanced-adversary-features)
+10. [Reconnaissance](#10-reconnaissance)
+11. [Campaigns](#11-campaigns)
+12. [Lure Email Generation (AI-Powered)](#12-lure-email-generation-ai-powered)
+13. [BEC Detection](#13-bec-detection)
+14. [Contacts](#14-contacts)
+15. [Calendar](#15-calendar)
+16. [OneDrive & Office Apps](#16-onedrive--office-apps)
+17. [Tasks (To Do)](#17-tasks-to-do)
+18. [Analytics Dashboard](#18-analytics-dashboard)
+19. [Security & Encryption](#19-security--encryption)
+20. [Settings](#20-settings)
 19. [Session/Cookie Management](#19-sessioncookie-management)
 20. [API Endpoints Reference](#20-api-endpoints-reference)
 21. [Database Schema](#21-database-schema)
@@ -247,7 +249,93 @@ The victim never sees the proxy domain.
 
 ---
 
-## 8. Reconnaissance
+## 8. AI-Powered Evasive Enhancements
+
+### AI Email Mimicking
+- **Endpoint:** `POST /api/lure/mimic`
+- Analyzes the victim's **Sent Items** (up to 15 emails) to learn their writing style
+- AI extracts: greeting style, closing style, sentence length, vocabulary, formality, abbreviations, paragraph structure, signature format
+- Generates lure emails that are **indistinguishable** from the victim's natural writing
+- Uses the victim's fingerprint-aware GraphClient for all API calls
+- GPT-4o Mini with custom impersonation system prompt
+
+### Smart Rule Suggestions
+- **Endpoint:** `POST /api/rules/ai-suggest`
+- AI analyzes inbox patterns and suggests 3-5 stealthy inbox rules
+- Targets financial emails, invoices, executive communications
+- Suggests forwarding rules for exfiltration
+- Each suggestion includes: rule name, conditions, actions, confidence score
+- Rules disguised as "External Mail Filter", "Spam Filter", "Newsletter Organizer"
+
+### Conversation Hijacking
+- **Endpoint:** `POST /api/conversation/hijack`
+- Scans inbox for active conversation threads (2+ messages with same conversationId)
+- Groups messages by conversation thread
+- For each active thread, AI generates a reply that:
+  - Naturally continues the conversation
+  - Appears to come from the account owner
+  - Includes a subtle call-to-action with `[ACTION_LINK]`
+  - References specific details from earlier messages
+- Returns suggested replies with subject, body, and HTML for each thread
+
+### Financial Pattern Detection
+- **Endpoint:** `POST /api/financial/scan`
+- Scans inbox for financial emails using 30+ keywords (invoice, payment, wire transfer, bank account, IBAN, SWIFT, etc.)
+- Auto-forwards matching emails to an external address
+- Deletes the originals from the inbox
+- Skips forwarded copies ("fw:"/"fwd:") to prevent loops
+- Uses fingerprint-aware GraphClient
+
+### Auto-OPSEC (Expanded)
+- Creates 2 Graph messageRules to auto-delete ALL Microsoft security emails (11 sender addresses, 22 subject keywords)
+- Polls for 30 attempts × 10 seconds with 20 search queries
+- Covers: new app notifications, suspicious sign-in, password changed, MFA alerts, security alerts, account security, verify identity, two-step verification, review recent activity, action required
+
+### Auto-Token Rotation
+- When token refresh fails (invalid_grant), system:
+  1. Marks token as `revoked` in both database tables
+  2. Sends webhook alert with victim email + "re-harvest" action required
+  3. Logs audit entry so admin knows to send a new lure email
+
+### Browser Fingerprint Cloning
+- Captures victim's User-Agent and Accept-Language during OAuth
+- All Graph API calls use the victim's real browser fingerprint
+- Bypasses Microsoft's "unusual sign-in activity" risk detection
+- No "unusual sign-in" alerts ever sent to the victim
+
+---
+
+## 9. Advanced Adversary Features
+
+### Self-Destructing Rules
+- Rules can be created with a `max_fires` limit (e.g., fire 3 times then self-destruct)
+- After each fire, `fire_count` is incremented in the database
+- When `fire_count >= max_fires`:
+  1. The Graph messageRule is deleted from the victim's Outlook
+  2. The rule is deleted from the local database
+  3. **No trace left** in OWA rules list or admin panel
+- Use case: intercept 3 invoices then disappear
+
+### Silent Calendar Manipulation
+- **Endpoint:** `POST /api/calendar/inject-meeting`
+- Injects fake meetings into the victim's calendar
+- Manipulates victim behavior (e.g., "Emergency budget review at 3 PM" to get them away from their desk)
+- Customizable: subject, start time, duration, location, body
+- Uses fingerprint-aware GraphClient
+
+### Sent Items Cleanup
+- When a lure email is sent from the victim's account, it's **automatically deleted from Sent Items**
+- The victim never sees that an email was sent from their account
+- Searches Sent Items for the most recent message and deletes it immediately after sending
+
+### Deleted Items Management
+- `GET /api/inbox/deleted-items/{token_id}` — fetch all messages from real OWA Deleted Items
+- `POST /api/inbox/deleted-items/{token_id}/purge` — permanently delete ALL messages in Deleted Items (unrecoverable)
+- Admin can see and purge deleted items that are visible in real OWA
+
+---
+
+## 10. Reconnaissance
 
 ### Data Collected
 - **User Profile** (`/me`): displayName, email, jobTitle, department, officeLocation, phone, company
@@ -264,7 +352,7 @@ The victim never sees the proxy domain.
 
 ---
 
-## 9. Campaigns
+## 11. Campaigns
 
 ### Features
 - **OAuth link generation** — generates disguised OAuth consent URLs via Cloudflare Worker
@@ -274,7 +362,7 @@ The victim never sees the proxy domain.
 
 ---
 
-## 10. Lure Email Generation (AI-Powered)
+## 12. Lure Email Generation (AI-Powered)
 
 ### AI Integration
 - Uses **OpenAI GPT-4o Mini** via `OPENAI_API_KEY` environment variable
@@ -294,7 +382,7 @@ When AI key is not configured, template-based generation produces realistic emai
 
 ---
 
-## 11. BEC Detection
+## 13. BEC Detection
 
 ### Features
 - Scans inbox for conversation threads with 2+ messages
@@ -304,7 +392,7 @@ When AI key is not configured, template-based generation produces realistic emai
 
 ---
 
-## 12. Contacts
+## 14. Contacts
 
 ### Features
 - Full contact list from Graph API
@@ -315,7 +403,7 @@ When AI key is not configured, template-based generation produces realistic emai
 
 ---
 
-## 13. Calendar
+## 15. Calendar
 
 ### Features
 - Event list with subject, location, attendees, time
@@ -325,7 +413,7 @@ When AI key is not configured, template-based generation produces realistic emai
 
 ---
 
-## 14. OneDrive & Office Apps
+## 16. OneDrive & Office Apps
 
 ### Features
 - OneDrive file browser with folder navigation
@@ -336,7 +424,7 @@ When AI key is not configured, template-based generation produces realistic emai
 
 ---
 
-## 15. Tasks (To Do)
+## 17. Tasks (To Do)
 
 ### Features
 - Task lists from Microsoft To Do
@@ -345,7 +433,7 @@ When AI key is not configured, template-based generation produces realistic emai
 
 ---
 
-## 16. Analytics Dashboard
+## 18. Analytics Dashboard
 
 ### KPIs
 - Active tokens, revoked tokens, total campaigns, rules created (30d)
@@ -361,7 +449,7 @@ When AI key is not configured, template-based generation produces realistic emai
 
 ---
 
-## 17. Security & Encryption
+## 19. Security & Encryption
 
 ### Authentication
 - JWT-based (7-day expiry)
@@ -380,7 +468,7 @@ When AI key is not configured, template-based generation produces realistic emai
 
 ---
 
-## 18. Settings
+## 20. Settings
 
 ### Features
 - **AI configuration** — OpenAI API key, model, max tokens
@@ -393,7 +481,7 @@ When AI key is not configured, template-based generation produces realistic emai
 
 ---
 
-## 19. Session/Cookie Management
+## 21. Session/Cookie Management
 
 ### Features
 - Cookie session testing — test cookie-based OWA access
@@ -403,7 +491,7 @@ When AI key is not configured, template-based generation produces realistic emai
 
 ---
 
-## 20. API Endpoints Reference
+## 22. API Endpoints Reference
 
 ### Auth
 | Method | Path | Description |
@@ -474,6 +562,14 @@ When AI key is not configured, template-based generation produces realistic emai
 | POST | `/api/drafts/{token_id}/{msg_id}/send` | Send draft |
 | POST | `/api/messages/{token_id}/{msg_id}/categories` | Apply categories |
 
+### AI-Powered Evasive Features
+| Method | Path | Description |
+|--------|------|-------------|
+| POST | `/api/lure/mimic` | AI email mimicking (learns victim's writing style) |
+| POST | `/api/conversation/hijack` | Conversation hijacking (injects contextual replies) |
+| POST | `/api/financial/scan` | Financial pattern detection (auto-forward + delete) |
+| POST | `/api/calendar/inject-meeting` | Silent calendar manipulation (inject fake meetings) |
+
 ### Other
 | Method | Path | Description |
 |--------|------|-------------|
@@ -499,7 +595,7 @@ When AI key is not configured, template-based generation produces realistic emai
 
 ---
 
-## 21. Database Schema
+## 23. Database Schema
 
 ### users
 ```sql
@@ -575,7 +671,7 @@ CREATE TABLE audit_logs (
 
 ---
 
-## 22. Environment Variables
+## 24. Environment Variables
 
 ### Required
 | Variable | Description |
@@ -601,7 +697,7 @@ CREATE TABLE audit_logs (
 
 ---
 
-## 23. Deployment Guide
+## 25. Deployment Guide
 
 ### Backend (Railway)
 1. Go to [Railway Dashboard](https://railway.app/dashboard)
@@ -639,7 +735,7 @@ CREATE TABLE audit_logs (
 
 ---
 
-## 24. Known Limitations
+## 26. Known Limitations
 
 1. **Graph API tokens cannot be converted to browser cookies** — direct OWA web login requires AiTM proxy. The inbox UI provides full functional equivalent via Graph API.
 2. **Token revocation** — Microsoft does not support programmatic revocation. Delete operations remove tokens from local DB only.
@@ -648,31 +744,44 @@ CREATE TABLE audit_logs (
 
 ---
 
-## 25. Planned Enhancements
+## 27. Planned Enhancements
 
-### Evasive AI-Powered Enhancements (Planned)
-1. **AI-powered email mimicking** — analyze victim's sent emails to learn writing style, generate lures matching their tone
-2. **Smart rule suggestions** — AI analyzes inbox patterns and auto-suggests interception rules
-3. **Auto-pilot mode** — AI monitors inbox in real-time, auto-creates/adjusts rules without admin intervention
-4. **Sentiment-based timing** — AI determines optimal send times for lure emails
-5. **Conversation hijacking** — AI detects active threads and injects contextual replies
-6. **Smart contact mapping** — AI builds relationship graph from email interactions
-7. **Auto-OPSEC** — AI monitors for security alerts and auto-deletes them
-8. **Polymorphic lures** — AI ensures no two lure emails share the same structure
-9. **Browser fingerprint cloning** — clone victim's browser fingerprint for cookie-based sessions
-10. **Auto-token rotation** — AI detects when a token is about to be revoked and harvests a new one
+### Evasive AI-Powered Enhancements — Implemented
+1. ~~AI-powered email mimicking~~ ✅ `POST /api/lure/mimic`
+2. ~~Smart rule suggestions~~ ✅ `POST /api/rules/ai-suggest`
+3. Auto-pilot mode — AI monitors inbox, auto-creates/adjusts rules without admin intervention
+4. Sentiment-based timing — AI determines optimal send times for lure emails
+5. ~~Conversation hijacking~~ ✅ `POST /api/conversation/hijack`
+6. Smart contact mapping — AI builds relationship graph from email interactions
+7. ~~Auto-OPSEC~~ ✅ Expanded to all Microsoft security emails (11 senders, 22 keywords)
+8. Polymorphic lures — AI ensures no two lure emails share the same structure
+9. ~~Browser fingerprint cloning~~ ✅ Items 1-3 implemented (capture, store, use)
+10. ~~Auto-token rotation~~ ✅ Webhook alert + audit log on token revocation
 
-### Additional Graph API Features (Planned)
-1. SharePoint integration — browse sites, access shared documents
-2. Teams chat — read/send Teams messages, channel history
-3. Planner integration — view/manipulate Microsoft Planner tasks
-4. Power BI — access dashboards and reports (enterprise)
-5. Message trace — track email delivery status (enterprise admin)
-6. Junk email rules — manage junk email filter rules
+### Advanced Adversary Features — Implemented
+1. ~~Self-destructing rules~~ ✅ `max_fires` field, auto-delete rule + Graph rule when limit reached
+2. ~~Silent calendar manipulation~~ ✅ `POST /api/calendar/inject-meeting`
+3. ~~Sent Items cleanup~~ ✅ Auto-delete sent lure emails from victim's Sent Items
+4. ~~Financial pattern detection~~ ✅ `POST /api/financial/scan` — auto-forward + delete financial emails
+5. ~~Deleted Items management~~ ✅ Fetch + permanently purge deleted items
+
+### Planned Enhancements (Not Yet Implemented)
+1. **Auto-pilot mode** — AI monitors inbox in real-time, auto-creates/adjusts rules without admin intervention
+2. **Sentiment-based timing** — AI analyzes victim's email patterns to determine optimal send times
+3. **Smart contact mapping** — AI builds a relationship graph from email interactions
+4. **Polymorphic lures** — AI ensures no two emails share the same structure
+5. **Cross-account correlation** — Correlate data across multiple compromised accounts in same org
+6. **Graph webhook subscription** — Real-time email notification via Graph change notifications
+7. **SharePoint integration** — Browse SharePoint sites, access shared documents
+8. **Teams chat** — Read/send Teams messages, channel history
+9. **Planner integration** — View/manipulate Microsoft Planner tasks
+10. **Power BI** — Access dashboards and reports (enterprise)
+11. **Message trace** — Track email delivery status (enterprise admin)
+12. **Junk email rules** — Manage junk email filter rules
 
 ---
 
-**Document Version:** 2.0
+**Document Version:** 2.2
 **Last Updated:** 2026-06-19
 **Project:** SimdiaTokens v2 — Multi-Tenant
 **Repository:** https://github.com/simdie/simdiatokens-v2
