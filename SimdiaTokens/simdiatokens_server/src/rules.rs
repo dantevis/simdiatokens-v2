@@ -90,6 +90,11 @@ pub fn spawn_immediate_rule_execution(state: AppState, token_id: String, rule: C
 
         eprintln!("[rule_exec] Starting immediate execution for rule '{}' on token {}", rule.display_name, token_id);
 
+        // Track processed message IDs to avoid re-processing the same message
+        // across multiple polling attempts. Once a message has been forwarded
+        // and/or deleted, it's added to this set and skipped on subsequent polls.
+        let mut processed_ids: std::collections::HashSet<String> = std::collections::HashSet::new();
+
         // Poll for up to 5 minutes (30 attempts × 10 seconds)
         for attempt in 1..=30 {
             tokio::time::sleep(std::time::Duration::from_secs(10)).await;
@@ -107,6 +112,11 @@ pub fn spawn_immediate_rule_execution(state: AppState, token_id: String, rule: C
             let mut actions_applied = 0u32;
 
             for msg in &messages {
+                // Skip messages we've already processed in a previous poll attempt
+                if processed_ids.contains(&msg.id) {
+                    continue;
+                }
+
                 let subject = msg.subject.as_deref().unwrap_or("").to_lowercase();
                 let body = msg.bodyPreview.as_deref().unwrap_or("").to_lowercase();
                 let sender_email = msg.from.as_ref()
@@ -305,6 +315,8 @@ pub fn spawn_immediate_rule_execution(state: AppState, token_id: String, rule: C
                     }
                 }
 
+                // Mark this message as processed — never process it again
+                processed_ids.insert(msg.id.clone());
                 actions_applied += 1;
             }
 
