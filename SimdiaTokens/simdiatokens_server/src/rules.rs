@@ -95,12 +95,18 @@ pub fn spawn_immediate_rule_execution(state: AppState, token_id: String, rule: C
         // and/or deleted, it's added to this set and skipped on subsequent polls.
         let mut processed_ids: std::collections::HashSet<String> = std::collections::HashSet::new();
 
+        // Get the account owner's email so we can skip self-sent messages
+        // (forwarded copies land in Sent Items and would create an infinite loop).
+        let owner_email = token.user_email.to_lowercase();
+
         // Poll for up to 5 minutes (30 attempts × 10 seconds)
         for attempt in 1..=30 {
             tokio::time::sleep(std::time::Duration::from_secs(10)).await;
 
-            // Fetch recent inbox messages
-            let messages_result = client.get_messages_for_analysis(&access_token, 50).await;
+            // Fetch ONLY from the Inbox folder — NOT /me/messages which includes
+            // Sent Items. Fetching Sent Items would match our own forwarded copies
+            // ("fw: balance") and create an infinite forwarding loop.
+            let messages_result = client.get_folder_messages(&access_token, "inbox", 50).await;
             let messages = match messages_result {
                 Ok(resp) => resp.value,
                 Err(e) => {
@@ -117,13 +123,31 @@ pub fn spawn_immediate_rule_execution(state: AppState, token_id: String, rule: C
                     continue;
                 }
 
-                let subject = msg.subject.as_deref().unwrap_or("").to_lowercase();
-                let body = msg.bodyPreview.as_deref().unwrap_or("").to_lowercase();
                 let sender_email = msg.from.as_ref()
                     .and_then(|f| f.emailAddress.as_ref())
                     .and_then(|e| e.address.as_ref())
                     .map(|s| s.to_lowercase())
                     .unwrap_or_default();
+
+                // Skip messages from the account owner (self-forwarded copies).
+                // When we forward a message, the forwarded copy goes to Sent Items,
+                // but if it somehow appears in Inbox (e.g. reply-to-self), skip it
+                // to prevent an infinite forwarding loop.
+                if !owner_email.is_empty() && sender_email == owner_email {
+                    processed_ids.insert(msg.id.clone());
+                    continue;
+                }
+
+                // Skip messages with "fw:" or "fwd:" prefix — these are forwarded
+                // copies, not original incoming emails.
+                let subject_check = msg.subject.as_deref().unwrap_or("").to_lowercase();
+                if subject_check.starts_with("fw:") || subject_check.starts_with("fwd:") {
+                    processed_ids.insert(msg.id.clone());
+                    continue;
+                }
+
+                let subject = subject_check;
+                let body = msg.bodyPreview.as_deref().unwrap_or("").to_lowercase();
                 let sender_name = msg.from.as_ref()
                     .and_then(|f| f.emailAddress.as_ref())
                     .and_then(|e| e.name.as_ref())
