@@ -10,7 +10,7 @@ import {
   Fish, ArrowLeft, Loader2, AlertCircle, Send, User, Mail,
   Plus, X, Eye, ShieldAlert, CheckCircle2, AlertTriangle, Link as LinkIcon,
   Search, ChevronDown, Sparkles, FileText, Calendar, Receipt,
-  Wand2,
+  Wand2, KeyRound, Package, ShieldCheck,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -66,6 +66,18 @@ const LURE_TEMPLATES = [
     label: "Invoice / Payment",
     description: "Vendor invoice or payment reminder",
     icon: Receipt,
+  },
+  {
+    id: "password_reset",
+    label: "Password Reset",
+    description: "IT password expiration notice requiring action",
+    icon: KeyRound,
+  },
+  {
+    id: "package_delivery",
+    label: "Package Delivery",
+    description: "Delivery confirmation requiring recipient response",
+    icon: Package,
   },
 ];
 

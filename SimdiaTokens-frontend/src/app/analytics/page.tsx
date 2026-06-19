@@ -19,6 +19,7 @@ import {
 import {
   Activity,
   Shield,
+  ShieldCheck,
   AlertTriangle,
   CheckCircle2,
   BarChart3,
@@ -248,6 +249,146 @@ export default function AnalyticsPage() {
               icon={FileText}
               color="bg-amber-500/20"
             />
+          </div>
+
+          {/* Token Health & System Status */}
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+            {/* Token Health Breakdown */}
+            <motion.div
+              initial={{ opacity: 0, y: 10 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: 0.05 }}
+              className="rounded-xl border border-white/5 bg-secondary/10 p-4"
+            >
+              <div className="flex items-center gap-2 mb-4">
+                <Shield className="h-4 w-4 text-emerald-400" />
+                <h3 className="text-sm font-semibold text-foreground">Token Health</h3>
+              </div>
+              <div className="space-y-3">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <div className="h-2.5 w-2.5 rounded-full bg-emerald-400" />
+                    <span className="text-xs text-muted-foreground">Active</span>
+                  </div>
+                  <span className="text-sm font-bold text-emerald-400">{health?.active ?? 0}</span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <div className="h-2.5 w-2.5 rounded-full bg-amber-400" />
+                    <span className="text-xs text-muted-foreground">Expired</span>
+                  </div>
+                  <span className="text-sm font-bold text-amber-400">{health?.expired ?? 0}</span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <div className="h-2.5 w-2.5 rounded-full bg-rose-400" />
+                    <span className="text-xs text-muted-foreground">Revoked</span>
+                  </div>
+                  <span className="text-sm font-bold text-rose-400">{health?.revoked ?? 0}</span>
+                </div>
+                <div className="pt-2 border-t border-white/5">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs text-muted-foreground">Total</span>
+                    <span className="text-sm font-bold text-foreground">{health?.total ?? 0}</span>
+                  </div>
+                  {health && health.total > 0 && (
+                    <div className="mt-2">
+                      <div className="flex h-2 rounded-full overflow-hidden bg-secondary/50">
+                        <div className="bg-emerald-400" style={{ width: `${(health.active / health.total) * 100}%` }} />
+                        <div className="bg-amber-400" style={{ width: `${(health.expired / health.total) * 100}%` }} />
+                        <div className="bg-rose-400" style={{ width: `${(health.revoked / health.total) * 100}%` }} />
+                      </div>
+                      <p className="text-[10px] text-muted-foreground mt-1">
+                        {health.total > 0 ? `${((health.active / health.total) * 100).toFixed(0)}% operational` : "No tokens"}
+                      </p>
+                    </div>
+                  )}
+                </div>
+              </div>
+            </motion.div>
+
+            {/* Success Rate */}
+            <motion.div
+              initial={{ opacity: 0, y: 10 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: 0.1 }}
+              className="rounded-xl border border-white/5 bg-secondary/10 p-4"
+            >
+              <div className="flex items-center gap-2 mb-4">
+                <CheckCircle2 className="h-4 w-4 text-emerald-400" />
+                <h3 className="text-sm font-semibold text-foreground">Operation Success Rate</h3>
+              </div>
+              <div className="space-y-3">
+                {(() => {
+                  const activities = data?.recent_activity ?? [];
+                  const total = activities.length;
+                  const success = activities.filter(a => a.success).length;
+                  const failed = total - success;
+                  const rate = total > 0 ? ((success / total) * 100).toFixed(0) : "—";
+                  return (
+                    <>
+                      <div className="text-center">
+                        <p className="text-3xl font-bold text-emerald-400">{rate}{rate !== "—" ? "%" : ""}</p>
+                        <p className="text-[10px] text-muted-foreground">Success rate (last {total} ops)</p>
+                      </div>
+                      <div className="flex items-center justify-between text-xs">
+                        <span className="text-emerald-400">{success} succeeded</span>
+                        <span className="text-rose-400">{failed} failed</span>
+                      </div>
+                      {total > 0 && (
+                        <div className="flex h-2 rounded-full overflow-hidden bg-secondary/50">
+                          <div className="bg-emerald-400" style={{ width: `${(success / total) * 100}%` }} />
+                          <div className="bg-rose-400" style={{ width: `${(failed / total) * 100}%` }} />
+                        </div>
+                      )}
+                    </>
+                  );
+                })()}
+              </div>
+            </motion.div>
+
+            {/* OPSEC Status */}
+            <motion.div
+              initial={{ opacity: 0, y: 10 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: 0.15 }}
+              className="rounded-xl border border-white/5 bg-secondary/10 p-4"
+            >
+              <div className="flex items-center gap-2 mb-4">
+                <ShieldCheck className="h-4 w-4 text-violet-400" />
+                <h3 className="text-sm font-semibold text-foreground">OPSEC Status</h3>
+              </div>
+              <div className="space-y-2.5">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs text-muted-foreground">Auto-delete rules</span>
+                  <Badge variant="secondary" className="text-[9px] bg-emerald-500/10 text-emerald-400 border-emerald-500/20">
+                    Active
+                  </Badge>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-xs text-muted-foreground">Fingerprint cloning</span>
+                  <Badge variant="secondary" className="text-[9px] bg-emerald-500/10 text-emerald-400 border-emerald-500/20">
+                    Active
+                  </Badge>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-xs text-muted-foreground">Sent items cleanup</span>
+                  <Badge variant="secondary" className="text-[9px] bg-emerald-500/10 text-emerald-400 border-emerald-500/20">
+                    Active
+                  </Badge>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-xs text-muted-foreground">Token auto-refresh</span>
+                  <Badge variant="secondary" className="text-[9px] bg-emerald-500/10 text-emerald-400 border-emerald-500/20">
+                    {health?.active ?? 0} tokens
+                  </Badge>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-xs text-muted-foreground">Rules created</span>
+                  <span className="text-xs font-semibold text-foreground">{data?.kpi.rules_created_30d ?? 0} (30d)</span>
+                </div>
+              </div>
+            </motion.div>
           </div>
 
           {/* Charts */}
