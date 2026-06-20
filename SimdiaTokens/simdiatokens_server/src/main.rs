@@ -1493,6 +1493,9 @@ MASTER_SECRET={}
 CLIENT_ID={}
 CLIENT_SECRET={}
 REDIRECT_URI={}
+SEED_ADMIN_USERNAME={}
+SEED_ADMIN_EMAIL={}
+SEED_ADMIN_PASSWORD={}
 OPENAI_API_KEY={}
 CF_API_TOKEN={}
 CF_ACCOUNT_ID={}
@@ -1503,6 +1506,9 @@ CF_WORKERS_SUBDOMAIN={}"#,
         client_id,
         state.config.client_secret,
         redirect_uri,
+        body.admin_username,
+        body.admin_email,
+        body.admin_password,
         std::env::var("OPENAI_API_KEY").unwrap_or_else(|_| "".to_string()),
         cf_api_token,
         cf_account_id,

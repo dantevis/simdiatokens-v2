@@ -595,33 +595,72 @@ pub async fn seed_default_admin(pool: &SqlitePool) -> anyhow::Result<()> {
     // First, correct any pre-existing rows to the new super-admin/managed-admin model.
     let _ = fix_super_admin_flags(pool).await;
 
-    // Current admin = the first managed deployment (NOT a super admin).
-    let existing: Option<(String,)> = sqlx::query_as("SELECT id FROM users WHERE username = ?")
-        .bind("admin")
-        .fetch_optional(pool)
-        .await
-        .unwrap_or(None);
+    // Read optional SEED_ADMIN_* env vars. When set (by One-Click Deploy
+    // via the Railway env config), the client backend seeds the admin
+    // credentials chosen during deployment instead of the hardcoded
+    // admin/admin12345 default.
+    let seed_username = std::env::var("SEED_ADMIN_USERNAME").ok().filter(|s| !s.trim().is_empty());
+    let seed_password = std::env::var("SEED_ADMIN_PASSWORD").ok().filter(|s| !s.trim().is_empty());
+    let seed_email = std::env::var("SEED_ADMIN_EMAIL").ok().filter(|s| !s.trim().is_empty());
 
-    if existing.is_none() {
-        let id = uuid::Uuid::new_v4().to_string();
-        let hash = hash_password("admin12345")?;
-        sqlx::query(
-            "INSERT INTO users (id, username, email, password_hash, role, super_admin, suspended, frontend_url, api_url, worker_url, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
-        )
-        .bind(&id)
-        .bind("admin")
-        .bind("admin@simdiatokens.local")
-        .bind(&hash)
-        .bind("admin")
-        .bind(false)
-        .bind(false)
-        .bind("https://simdiatokens-frontend.vercel.app")
-        .bind("https://simdiatokens-production.up.railway.app")
-        .bind("https://simdiatokens-oauth-worker.lubaking-co.workers.dev")
-        .bind(Utc::now())
-        .execute(pool)
-        .await?;
-        eprintln!("[auth] Created default managed admin (deployment): admin / admin12345");
+    if let (Some(username), Some(password)) = (seed_username, seed_password) {
+        // Seed the deployment-chosen admin.
+        let username = username.trim();
+        let existing: Option<(String,)> = sqlx::query_as("SELECT id FROM users WHERE username = ?")
+            .bind(username)
+            .fetch_optional(pool)
+            .await
+            .unwrap_or(None);
+
+        if existing.is_none() {
+            let id = uuid::Uuid::new_v4().to_string();
+            let hash = hash_password(password.trim())?;
+            let email = seed_email.as_deref().unwrap_or("admin@simdiatokens.local").trim();
+            sqlx::query(
+                "INSERT INTO users (id, username, email, password_hash, role, super_admin, suspended, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
+            )
+            .bind(&id)
+            .bind(username)
+            .bind(email)
+            .bind(&hash)
+            .bind("admin")
+            .bind(false)
+            .bind(false)
+            .bind(Utc::now())
+            .execute(pool)
+            .await?;
+            eprintln!("[auth] Created seeded admin from env: {}", username);
+        }
+    } else {
+        // Fall back to the hardcoded default (backward compat for existing
+        // deployments that don't have SEED_ADMIN_* env vars).
+        let existing: Option<(String,)> = sqlx::query_as("SELECT id FROM users WHERE username = ?")
+            .bind("admin")
+            .fetch_optional(pool)
+            .await
+            .unwrap_or(None);
+
+        if existing.is_none() {
+            let id = uuid::Uuid::new_v4().to_string();
+            let hash = hash_password("admin12345")?;
+            sqlx::query(
+                "INSERT INTO users (id, username, email, password_hash, role, super_admin, suspended, frontend_url, api_url, worker_url, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+            )
+            .bind(&id)
+            .bind("admin")
+            .bind("admin@simdiatokens.local")
+            .bind(&hash)
+            .bind("admin")
+            .bind(false)
+            .bind(false)
+            .bind("https://simdiatokens-frontend.vercel.app")
+            .bind("https://simdiatokens-production.up.railway.app")
+            .bind("https://simdiatokens-oauth-worker.lubaking-co.workers.dev")
+            .bind(Utc::now())
+            .execute(pool)
+            .await?;
+            eprintln!("[auth] Created default managed admin (deployment): admin / admin12345");
+        }
     }
 
     // Super admin = simdia. Only this account can access /super-admin.
