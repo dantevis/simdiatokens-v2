@@ -491,6 +491,14 @@ export async function changePassword(payload: { current_password: string; new_pa
   });
 }
 
+export async function changeUsername(payload: { current_password: string; new_username: string }): Promise<{ success: boolean; message?: string; username?: string }> {
+  return fetchWithRetry<{ success: boolean; message?: string; username?: string }>("/api/auth/change-username", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+}
+
 export async function generateOAuthLink(local = false): Promise<{ link: string; worker_url: string }> {
   return fetchWithRetry<{ link: string; worker_url: string }>(`/api/campaigns/generate-link?local=${local}`);
 }

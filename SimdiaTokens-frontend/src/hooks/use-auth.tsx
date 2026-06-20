@@ -13,6 +13,9 @@ interface AuthContextValue {
   register: (username: string, password: string, role?: string) => Promise<void>;
   logout: () => void;
   hasRole: (role: UserRole) => boolean;
+  /** Re-fetch the current user from /api/auth/me and update the cached user.
+   * Useful after a username change so the UI reflects the new value. */
+  refreshUser: () => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextValue>({
@@ -24,6 +27,7 @@ const AuthContext = createContext<AuthContextValue>({
   register: async () => {},
   logout: () => {},
   hasRole: () => false,
+  refreshUser: async () => {},
 });
 
 const TOKEN_KEY = "simdia_token";
@@ -96,6 +100,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     [user]
   );
 
+  const refreshUser = useCallback(async () => {
+    if (!token) return;
+    try {
+      const u = await fetchMe(token);
+      setUser(u);
+    } catch {
+      // ignore — caller can handle
+    }
+  }, [token]);
+
   return (
     <AuthContext.Provider
       value={{
@@ -107,6 +121,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         register,
         logout,
         hasRole,
+        refreshUser,
       }}
     >
       {children}

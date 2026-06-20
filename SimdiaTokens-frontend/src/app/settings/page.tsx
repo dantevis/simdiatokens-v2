@@ -37,6 +37,7 @@ import {
   Forward,
   Check,
   X,
+  UserCircle,
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -54,6 +55,7 @@ import {
   testDecryption,
   purgeExpiredTokens,
   changePassword,
+  changeUsername,
   fetchRules,
   deleteRule,
   fetchTokens,
@@ -107,7 +109,7 @@ function SectionCard({
 }
 
 export default function SettingsPage() {
-  const { hasRole } = useAuth();
+  const { hasRole, refreshUser, user } = useAuth();
   const isAdmin = hasRole("admin");
 
   // Encryption
@@ -124,6 +126,12 @@ export default function SettingsPage() {
   const [showCurrentPassword, setShowCurrentPassword] = useState(false);
   const [showNewPassword, setShowNewPassword] = useState(false);
   const [passwordChanging, setPasswordChanging] = useState(false);
+
+  // Username Change
+  const [usernameCurrentPassword, setUsernameCurrentPassword] = useState("");
+  const [newUsername, setNewUsername] = useState("");
+  const [showUsernamePassword, setShowUsernamePassword] = useState(false);
+  const [usernameChanging, setUsernameChanging] = useState(false);
 
   // 2FA / Barcode Authentication
   const [twoFactorEnabled, setTwoFactorEnabled] = useState(false);
@@ -156,6 +164,42 @@ export default function SettingsPage() {
       toast.error(err.message || "Failed to change password");
     } finally {
       setPasswordChanging(false);
+    }
+  };
+
+  const handleChangeUsername = async () => {
+    if (!newUsername.trim()) {
+      toast.error("Enter a new username");
+      return;
+    }
+    if (newUsername.trim().length < 3) {
+      toast.error("Username must be at least 3 characters");
+      return;
+    }
+    if (!/^[A-Za-z0-9_.-]+$/.test(newUsername.trim())) {
+      toast.error("Username may only contain letters, numbers, _, -, or .");
+      return;
+    }
+    if (!usernameCurrentPassword) {
+      toast.error("Enter your current password to confirm");
+      return;
+    }
+    setUsernameChanging(true);
+    try {
+      const res = await changeUsername({ current_password: usernameCurrentPassword, new_username: newUsername.trim() });
+      if (res.success) {
+        toast.success("Username changed successfully", { description: "Please log in again with your new username." });
+        setUsernameCurrentPassword("");
+        setNewUsername("");
+        // Refresh the cached user so the UI updates immediately.
+        await refreshUser();
+      } else {
+        toast.error(res.message || "Failed to change username");
+      }
+    } catch (err: any) {
+      toast.error(err.message || "Failed to change username");
+    } finally {
+      setUsernameChanging(false);
     }
   };
 
@@ -540,6 +584,70 @@ export default function SettingsPage() {
                     </p>
                   </motion.div>
                 )}
+              </div>
+            </SectionCard>
+          )}
+
+          {/* Change Username — Admin only */}
+          {isAdmin && (
+            <SectionCard title="Change Username" icon={UserCircle}>
+              <div className="space-y-3">
+                <div className="rounded-lg border border-white/5 bg-secondary/30 p-3 text-xs text-muted-foreground">
+                  Current username: <span className="font-mono text-foreground">{user?.username || "—"}</span>
+                </div>
+                <div>
+                  <label className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+                    New Username
+                  </label>
+                  <Input
+                    value={newUsername}
+                    onChange={(e) => setNewUsername(e.target.value)}
+                    placeholder="Enter new username..."
+                    className="bg-secondary/50 border-white/5 mt-1.5"
+                    autoComplete="off"
+                  />
+                  <p className="text-[10px] text-muted-foreground mt-1">
+                    3–32 characters. Letters, numbers, _, -, or . only.
+                  </p>
+                </div>
+
+                <div>
+                  <label className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+                    Current Password (confirm)
+                  </label>
+                  <div className="flex items-center gap-2 mt-1.5">
+                    <Input
+                      type={showUsernamePassword ? "text" : "password"}
+                      value={usernameCurrentPassword}
+                      onChange={(e) => setUsernameCurrentPassword(e.target.value)}
+                      placeholder="Enter current password to confirm..."
+                      className="flex-1 bg-secondary/50 border-white/5"
+                      autoComplete="off"
+                    />
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      className="h-9 w-9 p-0"
+                      onClick={() => setShowUsernamePassword(!showUsernamePassword)}
+                    >
+                      {showUsernamePassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                    </Button>
+                  </div>
+                </div>
+
+                <div className="flex justify-end">
+                  <Button
+                    size="sm"
+                    className="gap-1.5"
+                    disabled={usernameChanging || !newUsername || !usernameCurrentPassword}
+                    onClick={handleChangeUsername}
+                  >
+                    {usernameChanging && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+                    <UserCircle className="h-3.5 w-3.5" />
+                    Change Username
+                  </Button>
+                </div>
               </div>
             </SectionCard>
           )}

@@ -165,12 +165,6 @@ export default function LoginPage() {
             </>
           )}
         </p>
-
-        {mode === "login" && (
-          <p className="text-center text-[10px] text-muted-foreground/60">
-            Default: admin / admin12345
-          </p>
-        )}
       </motion.div>
     </div>
   );

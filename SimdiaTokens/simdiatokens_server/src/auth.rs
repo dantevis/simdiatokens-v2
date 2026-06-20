@@ -399,6 +399,12 @@ pub struct ChangePasswordRequest {
     pub new_password: String,
 }
 
+#[derive(Deserialize)]
+pub struct ChangeUsernameRequest {
+    pub current_password: String,
+    pub new_username: String,
+}
+
 pub async fn change_password_handler(
     auth: AuthContext,
     body: web::Json<ChangePasswordRequest>,
@@ -448,6 +454,93 @@ pub async fn change_password_handler(
     {
         Ok(_) => HttpResponse::Ok().json(serde_json::json!({"success": true, "message": "Password changed successfully"})),
         Err(_) => HttpResponse::InternalServerError().json(serde_json::json!({"error": "update_failed"})),
+    }
+}
+
+pub async fn change_username_handler(
+    auth: AuthContext,
+    body: web::Json<ChangeUsernameRequest>,
+    state: web::Data<crate::AppState>,
+) -> impl Responder {
+    let new_username = body.new_username.trim().to_string();
+    if new_username.is_empty() || new_username.len() < 3 {
+        return HttpResponse::BadRequest().json(serde_json::json!({
+            "error": "invalid_username",
+            "message": "New username must be at least 3 characters"
+        }));
+    }
+    if new_username.len() > 32 {
+        return HttpResponse::BadRequest().json(serde_json::json!({
+            "error": "invalid_username",
+            "message": "New username must be at most 32 characters"
+        }));
+    }
+    if !new_username.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '-' || c == '.') {
+        return HttpResponse::BadRequest().json(serde_json::json!({
+            "error": "invalid_username",
+            "message": "Username may only contain letters, numbers, _, -, or ."
+        }));
+    }
+
+    // Fetch the current user row so we can verify the current password.
+    let user: Option<User> = sqlx::query_as::<_, User>(
+        "SELECT id, username, email, password_hash, role, super_admin, suspended, expires_at, usage_days, api_url, frontend_url, worker_url, created_at FROM users WHERE id = ?"
+    )
+    .bind(&auth.user_id)
+    .fetch_optional(&state.pool)
+    .await
+    .unwrap_or(None);
+
+    let user = match user {
+        Some(u) => u,
+        None => {
+            return HttpResponse::NotFound().json(serde_json::json!({"error": "user_not_found"}));
+        }
+    };
+
+    if !verify_password(&body.current_password, &user.password_hash) {
+        return HttpResponse::Unauthorized().json(serde_json::json!({
+            "error": "invalid_credentials",
+            "message": "Current password is incorrect"
+        }));
+    }
+
+    if new_username.eq_ignore_ascii_case(&user.username) {
+        return HttpResponse::BadRequest().json(serde_json::json!({
+            "error": "same_username",
+            "message": "New username is the same as the current username"
+        }));
+    }
+
+    // Reject if the new username is already taken (case-insensitive).
+    let clash: Option<(String,)> = sqlx::query_as("SELECT id FROM users WHERE LOWER(username) = LOWER(?) AND id != ?")
+        .bind(&new_username)
+        .bind(&auth.user_id)
+        .fetch_optional(&state.pool)
+        .await
+        .unwrap_or(None);
+    if clash.is_some() {
+        return HttpResponse::Conflict().json(serde_json::json!({
+            "error": "username_taken",
+            "message": "That username is already in use"
+        }));
+    }
+
+    match sqlx::query("UPDATE users SET username = ? WHERE id = ?")
+        .bind(&new_username)
+        .bind(&auth.user_id)
+        .execute(&state.pool)
+        .await
+    {
+        Ok(_) => HttpResponse::Ok().json(serde_json::json!({
+            "success": true,
+            "message": "Username changed successfully",
+            "username": new_username,
+        })),
+        Err(e) => HttpResponse::InternalServerError().json(serde_json::json!({
+            "error": "update_failed",
+            "message": format!("Failed to update username: {}", e),
+        })),
     }
 }
 

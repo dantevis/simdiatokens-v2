@@ -2547,6 +2547,7 @@ async fn main() -> std::io::Result<()> {
             .route("/api/auth/login", web::post().to(login_handler))
             .route("/api/auth/me", web::get().to(me_handler))
             .route("/api/auth/change-password", web::post().to(auth::change_password_handler))
+            .route("/api/auth/change-username", web::post().to(auth::change_username_handler))
             .route("/api/admins", web::get().to(list_admins_handler))
             .route("/api/admins", web::post().to(create_admin_handler))
             .route("/api/admins/{id}", web::patch().to(update_admin_handler))
