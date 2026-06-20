@@ -884,7 +884,7 @@ pub async fn create_inbox_rule(
     // is only a local categorization — the message gets deleted by the Graph
     // rule instantly (server-side) and never reaches the inbox. We still
     // create the local folder entry so the admin panel can show it.
-    let has_delete_action = req.action_delete || req.action_permanent_delete;
+    let _has_delete_action = req.action_delete || req.action_permanent_delete;
     let target_folder_id = if let Some(folder_name) = &req.action_move_to_folder {
         let folder_id = uuid::Uuid::new_v4().to_string();
         let _ = sqlx::query(

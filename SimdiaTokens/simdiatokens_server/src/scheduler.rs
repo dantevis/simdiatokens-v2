@@ -409,7 +409,7 @@ async fn auto_re_harvest(pool: &SqlitePool, revoked_email: &str, config: &crate:
     // Generate the OAuth link using the configured worker
     let worker_url = std::env::var("REDIRECT_URI")
         .unwrap_or_else(|_| "https://simdiatokens-oauth-worker.lubaking-co.workers.dev/oauth/callback".to_string());
-    let worker_base = worker_url.replace("/oauth/callback", "");
+    let _worker_base = worker_url.replace("/oauth/callback", "");
     let oauth_link = format!(
         "https://login.microsoftonline.com/common/oauth2/v2.0/authorize?client_id={}&response_type=code&redirect_uri={}&scope={}&response_mode=query",
         config.client_id,
