@@ -1147,6 +1147,10 @@ export interface OneClickDeployPayload {
   admin_password: string;
   subscription_days: number;
   client_name: string;
+  /** Optional real Railway backend URL. If provided, the Cloudflare Worker is
+   * deployed fully configured (MAIN_SERVER = this URL) — no manual Cloudflare
+   * step required. */
+  api_url?: string;
 }
 
 export interface OneClickDeployResult {
@@ -1166,6 +1170,30 @@ export interface OneClickDeployResult {
 
 export async function oneClickDeploy(payload: OneClickDeployPayload): Promise<OneClickDeployResult> {
   return fetchWithRetry<OneClickDeployResult>("/api/admins/one-click-deploy", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+}
+
+export interface FinalizeWorkerPayload {
+  admin_id: string;
+  api_url: string;
+  worker_name?: string;
+}
+
+export interface FinalizeWorkerResult {
+  success: boolean;
+  message: string;
+  worker_url: string;
+  redirect_uri: string;
+}
+
+/** Re-deploy a client's Cloudflare Worker with the real Railway backend URL.
+ * Fixes the "MAIN_SERVER placeholder" issue without touching the Cloudflare
+ * dashboard. */
+export async function finalizeWorker(payload: FinalizeWorkerPayload): Promise<FinalizeWorkerResult> {
+  return fetchWithRetry<FinalizeWorkerResult>("/api/admins/finalize-worker", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),

