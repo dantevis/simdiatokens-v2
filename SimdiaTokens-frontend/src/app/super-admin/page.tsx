@@ -76,6 +76,10 @@ export default function SuperAdminPage() {
   const [ocPassword, setOcPassword] = useState("");
   const [ocDays, setOcDays] = useState("30");
   const [ocApiUrl, setOcApiUrl] = useState("");
+  const [ocRailwayToken, setOcRailwayToken] = useState("");
+  const [ocVercelToken, setOcVercelToken] = useState("");
+  const [ocVercelTeamId, setOcVercelTeamId] = useState("");
+  const [ocGithubRepo, setOcGithubRepo] = useState("");
   const [activityLoading, setActivityLoading] = useState(false);
   const [finalizeLoading, setFinalizeLoading] = useState(false);
   const [finalizeApiUrl, setFinalizeApiUrl] = useState("");
@@ -272,6 +276,10 @@ export default function SuperAdminPage() {
         subscription_days: parseInt(ocDays) || 30,
         client_name: ocClientName.trim(),
         api_url: ocApiUrl.trim() || undefined,
+        railway_api_token: ocRailwayToken.trim() || undefined,
+        vercel_api_token: ocVercelToken.trim() || undefined,
+        vercel_team_id: ocVercelTeamId.trim() || undefined,
+        github_repo: ocGithubRepo.trim() || undefined,
       });
       setOneClickResult(result);
       if (result.success) {
@@ -326,6 +334,10 @@ export default function SuperAdminPage() {
     setOcPassword("");
     setOcDays("30");
     setOcApiUrl("");
+    setOcRailwayToken("");
+    setOcVercelToken("");
+    setOcVercelTeamId("");
+    setOcGithubRepo("");
     setOneClickResult(null);
   };
 
@@ -1099,8 +1111,33 @@ export default function SuperAdminPage() {
                       <Input value={ocApiUrl} onChange={(e) => setOcApiUrl(e.target.value)} placeholder="https://your-app.up.railway.app" className="bg-white/5 border-white/10" />
                       <p className="text-[11px] text-muted-foreground mt-1">
                         If you already deployed Railway, paste the URL here. The Worker is created fully configured (no manual Cloudflare step).
-                        Leave empty to deploy Railway first and use "Finalize Worker" later.
+                        Leave empty to deploy Railway first and use &quot;Finalize Worker&quot; later.
                       </p>
+                    </div>
+
+                    {/* Auto-deploy section */}
+                    <div className="rounded-lg border border-[#0078d4]/20 bg-[#0078d4]/5 p-3 space-y-3">
+                      <p className="text-xs font-medium text-[#0078d4]">Auto-Deploy (optional) — skip manual Railway/Vercel setup</p>
+                      <div>
+                        <label className="text-xs font-medium text-muted-foreground mb-1 block">Railway API Token</label>
+                        <Input value={ocRailwayToken} onChange={(e) => setOcRailwayToken(e.target.value)} placeholder="Get from railway.com/account/tokens" className="bg-white/5 border-white/10 text-xs" type="password" />
+                        <p className="text-[10px] text-muted-foreground mt-1">Auto-creates Railway project + service with env vars, volume, and triggers deploy.</p>
+                      </div>
+                      <div className="grid grid-cols-2 gap-3">
+                        <div>
+                          <label className="text-xs font-medium text-muted-foreground mb-1 block">Vercel API Token</label>
+                          <Input value={ocVercelToken} onChange={(e) => setOcVercelToken(e.target.value)} placeholder="Get from vercel.com/settings/tokens" className="bg-white/5 border-white/10 text-xs" type="password" />
+                        </div>
+                        <div>
+                          <label className="text-xs font-medium text-muted-foreground mb-1 block">Vercel Team ID (optional)</label>
+                          <Input value={ocVercelTeamId} onChange={(e) => setOcVercelTeamId(e.target.value)} placeholder="team_xxx" className="bg-white/5 border-white/10 text-xs" />
+                        </div>
+                      </div>
+                      <div>
+                        <label className="text-xs font-medium text-muted-foreground mb-1 block">GitHub Repo (optional)</label>
+                        <Input value={ocGithubRepo} onChange={(e) => setOcGithubRepo(e.target.value)} placeholder="simdie/simdiatokens-v2 (default)" className="bg-white/5 border-white/10 text-xs" />
+                        <p className="text-[10px] text-muted-foreground mt-1">Use a fork for separate GitHub accounts. Railway/Vercel GitHub app must be installed on this repo.</p>
+                      </div>
                     </div>
                   </div>
                   <div className="rounded-lg border border-[#0078d4]/20 bg-[#0078d4]/5 p-3 text-xs text-muted-foreground">

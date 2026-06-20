@@ -1159,6 +1159,14 @@ export interface OneClickDeployPayload {
    * deployed fully configured (MAIN_SERVER = this URL) — no manual Cloudflare
    * step required. */
   api_url?: string;
+  /** Per-client Railway API token for auto-deploy. */
+  railway_api_token?: string;
+  /** Per-client Vercel API token for auto-deploy. */
+  vercel_api_token?: string;
+  /** Optional Vercel team ID. */
+  vercel_team_id?: string;
+  /** GitHub repo to deploy from (defaults to simdie/simdiatokens-v2). */
+  github_repo?: string;
 }
 
 export interface OneClickDeployResult {
@@ -1174,6 +1182,8 @@ export interface OneClickDeployResult {
   admin_id: string;
   azure_redirect_instructions: string;
   manual_steps: string[];
+  railway_auto_deployed: boolean;
+  vercel_auto_deployed: boolean;
 }
 
 export async function oneClickDeploy(payload: OneClickDeployPayload): Promise<OneClickDeployResult> {

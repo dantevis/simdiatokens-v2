@@ -1346,6 +1346,18 @@ struct OneClickDeployRequest {
     /// the "Finalize Worker" step (or update MAIN_SERVER manually) after
     /// Railway is live.
     api_url: Option<String>,
+    /// Per-client Railway API token. If provided, the backend auto-creates
+    /// a Railway project + service with all env vars, a volume, and triggers
+    /// a deploy — no manual Railway dashboard step needed.
+    railway_api_token: Option<String>,
+    /// Per-client Vercel API token. If provided, the backend auto-creates a
+    /// Vercel project with all env vars — no manual Vercel dashboard step.
+    vercel_api_token: Option<String>,
+    /// Optional Vercel team ID (if deploying under a team).
+    vercel_team_id: Option<String>,
+    /// GitHub repo to deploy from (defaults to "simdie/simdiatokens-v2").
+    /// For separate GitHub accounts, use the fork's full name e.g. "otheruser/simdiatokens-v2".
+    github_repo: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -1362,6 +1374,10 @@ struct OneClickDeployResponse {
     admin_id: String,
     azure_redirect_instructions: String,
     manual_steps: Vec<String>,
+    /// True if Railway was auto-deployed via API.
+    railway_auto_deployed: bool,
+    /// True if Vercel was auto-deployed via API.
+    vercel_auto_deployed: bool,
 }
 
 /// Push the worker script to Cloudflare with the given bindings.
@@ -1429,6 +1445,207 @@ fn normalize_api_url(raw: &str) -> Option<String> {
     Some(trimmed)
 }
 
+// ============================================================
+// RAILWAY API — auto-create Railway project + service + deploy
+// ============================================================
+
+async fn railway_graphql(
+    token: &str,
+    query: &str,
+    variables: serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    let body = serde_json::json!({ "query": query, "variables": variables });
+    let res = reqwest::Client::new()
+        .post("https://backboard.railway.com/graphql/v2")
+        .header("Authorization", format!("Bearer {}", token))
+        .header("Content-Type", "application/json")
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| format!("Railway API request failed: {}", e))?;
+    let status = res.status();
+    let text = res.text().await.unwrap_or_default();
+    if !status.is_success() {
+        return Err(format!("Railway API returned {}: {}", status, text));
+    }
+    let json: serde_json::Value = serde_json::from_str(&text)
+        .map_err(|e| format!("Failed to parse Railway response: {}", e))?;
+    if let Some(errors) = json.get("errors") {
+        return Err(format!("Railway GraphQL errors: {}", errors));
+    }
+    Ok(json.get("data").cloned().unwrap_or(serde_json::Value::Null))
+}
+
+/// Auto-deploy a Railway backend service for a new client.
+/// Returns the public Railway URL on success.
+async fn deploy_to_railway(
+    railway_token: &str,
+    project_name: &str,
+    github_repo: &str,
+    env_vars: &serde_json::Value,
+) -> Result<String, String> {
+    // 1. Create project
+    let project_data = railway_graphql(
+        railway_token,
+        r#"mutation projectCreate($input: ProjectCreateInput!) {
+            projectCreate(input: $input) { id }
+        }"#,
+        serde_json::json!({ "input": { "name": project_name } }),
+    ).await?;
+    let project_id = project_data
+        .get("projectCreate").and_then(|v| v.get("id")).and_then(|v| v.as_str())
+        .ok_or("Failed to get project ID from Railway")?;
+
+    // 2. Get default environment
+    let env_data = railway_graphql(
+        railway_token,
+        r#"query environments($projectId: String!) {
+            environments(projectId: $projectId) {
+                edges { node { id name } }
+            }
+        }"#,
+        serde_json::json!({ "projectId": project_id }),
+    ).await?;
+    let environment_id = env_data
+        .get("environments").and_then(|v| v.get("edges")).and_then(|v| v.as_array())
+        .and_then(|arr| arr.first()).and_then(|e| e.get("node"))
+        .and_then(|n| n.get("id")).and_then(|v| v.as_str())
+        .ok_or("Failed to get environment ID from Railway")?;
+
+    // 3. Create service from GitHub repo with initial env vars
+    let service_data = railway_graphql(
+        railway_token,
+        r#"mutation serviceCreate($input: ServiceCreateInput!) {
+            serviceCreate(input: $input) { id }
+        }"#,
+        serde_json::json!({
+            "input": {
+                "projectId": project_id,
+                "name": "api",
+                "source": { "repo": github_repo },
+                "variables": env_vars,
+            }
+        }),
+    ).await?;
+    let service_id = service_data
+        .get("serviceCreate").and_then(|v| v.get("id")).and_then(|v| v.as_str())
+        .ok_or("Failed to get service ID from Railway")?;
+
+    // 4. Set root directory for monorepo
+    let _ = railway_graphql(
+        railway_token,
+        r#"mutation serviceInstanceUpdate($serviceId: String!, $environmentId: String!, $input: ServiceInstanceUpdateInput!) {
+            serviceInstanceUpdate(serviceId: $serviceId, environmentId: $environmentId, input: $input)
+        }"#,
+        serde_json::json!({
+            "serviceId": service_id,
+            "environmentId": environment_id,
+            "input": { "rootDirectory": "SimdiaTokens/simdiatokens_server" }
+        }),
+    ).await;
+
+    // 5. Create volume at /app/data
+    let _ = railway_graphql(
+        railway_token,
+        r#"mutation volumeCreate($input: VolumeCreateInput!) {
+            volumeCreate(input: $input) { id }
+        }"#,
+        serde_json::json!({
+            "input": {
+                "projectId": project_id,
+                "serviceId": service_id,
+                "mountPath": "/app/data",
+                "environmentId": environment_id,
+            }
+        }),
+    ).await;
+
+    // 6. Create public domain
+    let domain_data = railway_graphql(
+        railway_token,
+        r#"mutation serviceDomainCreate($input: ServiceDomainCreateInput!) {
+            serviceDomainCreate(input: $input) { domain }
+        }"#,
+        serde_json::json!({
+            "input": { "serviceId": service_id, "environmentId": environment_id }
+        }),
+    ).await?;
+    let domain = domain_data
+        .get("serviceDomainCreate").and_then(|v| v.get("domain")).and_then(|v| v.as_str())
+        .ok_or("Failed to get domain from Railway")?;
+
+    // 7. Trigger deployment
+    let _ = railway_graphql(
+        railway_token,
+        r#"mutation serviceInstanceDeployV2($serviceId: String!, $environmentId: String!) {
+            serviceInstanceDeployV2(serviceId: $serviceId, environmentId: $environmentId)
+        }"#,
+        serde_json::json!({
+            "serviceId": service_id,
+            "environmentId": environment_id,
+        }),
+    ).await;
+
+    Ok(format!("https://{}", domain))
+}
+
+// ============================================================
+// VERCEL API — auto-create Vercel project + deploy
+// ============================================================
+
+/// Auto-deploy a Vercel frontend project for a new client.
+/// Returns the Vercel URL on success.
+async fn deploy_to_vercel(
+    vercel_token: &str,
+    team_id: Option<&str>,
+    project_name: &str,
+    github_repo: &str,
+    env_vars: &[(&str, &str)],
+) -> Result<String, String> {
+    let mut url = "https://api.vercel.com/v11/projects".to_string();
+    if let Some(tid) = team_id {
+        if !tid.is_empty() {
+            url.push_str(&format!("?teamId={}", tid));
+        }
+    }
+
+    let environment_variables: Vec<serde_json::Value> = env_vars
+        .iter()
+        .map(|(key, value)| serde_json::json!({
+            "key": key, "value": value, "type": "plain",
+            "target": ["production", "preview", "development"],
+        }))
+        .collect();
+
+    let body = serde_json::json!({
+        "name": project_name,
+        "framework": "nextjs",
+        "rootDirectory": "SimdiaTokens-frontend",
+        "gitRepository": { "type": "github", "repo": github_repo },
+        "buildCommand": "next build",
+        "installCommand": "npm ci",
+        "environmentVariables": environment_variables,
+    });
+
+    let res = reqwest::Client::new()
+        .post(&url)
+        .header("Authorization", format!("Bearer {}", vercel_token))
+        .header("Content-Type", "application/json")
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| format!("Vercel API request failed: {}", e))?;
+    let status = res.status();
+    let text = res.text().await.unwrap_or_default();
+    if !status.is_success() {
+        return Err(format!("Vercel API returned {}: {}", status, text));
+    }
+    let json: serde_json::Value = serde_json::from_str(&text)
+        .map_err(|e| format!("Failed to parse Vercel response: {}", e))?;
+    let name = json.get("name").and_then(|v| v.as_str()).unwrap_or(project_name);
+    Ok(format!("https://{}.vercel.app", name))
+}
+
 /// One-Click Deploy: Creates a Cloudflare Worker, generates env configs
 /// for Railway and Vercel, and registers the admin in the super admin DB.
 /// The user only needs to manually create Railway + Vercel services and
@@ -1459,33 +1676,30 @@ async fn one_click_deploy_handler(
     let worker_name = format!("simdia-{}-worker", client_slug);
     let worker_url = format!("https://{}.{}", worker_name, workers_subdomain);
     let redirect_uri = format!("{}/oauth/callback", worker_url);
+    let github_repo = body.github_repo.clone().unwrap_or_else(|| "simdie/simdiatokens-v2".to_string());
 
-    // Resolve the real API URL if the user provided one. Otherwise use a
-    // placeholder that the user will fix later via "Finalize Worker".
-    let real_api_url = body.api_url.as_deref().and_then(normalize_api_url);
-    let api_url = real_api_url.clone().unwrap_or_else(|| format!("https://{}-api.up.railway.app", client_slug));
-    let worker_main_server = real_api_url.clone().unwrap_or_else(|| format!("https://{}-api.up.railway.app", client_slug));
-    let frontend_url_placeholder = format!("https://{}-simdia.vercel.app", client_slug);
-
-    // Step 1: Deploy the Cloudflare Worker (with real URL if available)
-    let worker_deployed = match push_worker_to_cloudflare(
-        &state, &cf_account_id, &cf_api_token, &worker_name, &workers_subdomain,
-        &worker_main_server, &redirect_uri,
-    ).await {
-        Ok(_url) => {
-            println!("[one-click] Deployed worker: {} (MAIN_SERVER={})", worker_url, worker_main_server);
-            true
-        }
-        Err(e) => {
-            eprintln!("[one-click] Worker deploy failed: {}", e);
-            // Continue anyway — the user can deploy/finalize the worker manually
-            false
-        }
-    };
-
-    // Step 2: Generate Railway env config
+    // Generate secrets for this client
     let jwt_secret = uuid::Uuid::new_v4().to_string().replace("-", "");
     let master_secret = uuid::Uuid::new_v4().to_string().replace("-", "");
+
+    // Build Railway env vars as JSON (for API auto-deploy) and as text (for manual fallback)
+    let openai_key = std::env::var("OPENAI_API_KEY").unwrap_or_else(|_| "".to_string());
+    let railway_env_json = serde_json::json!({
+        "DATABASE_URL": "sqlite:///app/data/simdiatokens.db",
+        "JWT_SECRET": jwt_secret,
+        "MASTER_SECRET": master_secret,
+        "CLIENT_ID": client_id,
+        "CLIENT_SECRET": state.config.client_secret,
+        "REDIRECT_URI": redirect_uri,
+        "SEED_ADMIN_USERNAME": body.admin_username,
+        "SEED_ADMIN_EMAIL": body.admin_email,
+        "SEED_ADMIN_PASSWORD": body.admin_password,
+        "OPENAI_API_KEY": openai_key,
+        "CF_API_TOKEN": cf_api_token,
+        "CF_ACCOUNT_ID": cf_account_id,
+        "CF_WORKER_NAME": worker_name,
+        "CF_WORKERS_SUBDOMAIN": workers_subdomain,
+    });
     let railway_env = format!(
         r#"DATABASE_URL=sqlite:///app/data/simdiatokens.db
 JWT_SECRET={}
@@ -1501,30 +1715,85 @@ CF_API_TOKEN={}
 CF_ACCOUNT_ID={}
 CF_WORKER_NAME={}
 CF_WORKERS_SUBDOMAIN={}"#,
-        jwt_secret,
-        master_secret,
-        client_id,
-        state.config.client_secret,
-        redirect_uri,
-        body.admin_username,
-        body.admin_email,
-        body.admin_password,
-        std::env::var("OPENAI_API_KEY").unwrap_or_else(|_| "".to_string()),
-        cf_api_token,
-        cf_account_id,
-        worker_name,
-        workers_subdomain,
+        jwt_secret, master_secret, client_id, state.config.client_secret, redirect_uri,
+        body.admin_username, body.admin_email, body.admin_password,
+        openai_key, cf_api_token, cf_account_id, worker_name, workers_subdomain,
     );
 
-    // Step 3: Generate Vercel env config
+    // === Step 1: Auto-deploy Railway if token provided ===
+    let mut railway_auto_deployed = false;
+    let mut railway_url: String = body.api_url.as_deref().and_then(normalize_api_url)
+        .unwrap_or_else(|| format!("https://{}-api.up.railway.app", client_slug));
+
+    if let Some(railway_token) = &body.railway_api_token {
+        let railway_token = railway_token.trim();
+        if !railway_token.is_empty() {
+            let railway_project_name = format!("simdiatokens-{}", client_slug);
+            println!("[one-click] Auto-deploying Railway: {}", railway_project_name);
+            match deploy_to_railway(railway_token, &railway_project_name, &github_repo, &railway_env_json).await {
+                Ok(url) => {
+                    println!("[one-click] Railway auto-deployed: {}", url);
+                    railway_url = url;
+                    railway_auto_deployed = true;
+                }
+                Err(e) => {
+                    eprintln!("[one-click] Railway auto-deploy failed: {}", e);
+                }
+            }
+        }
+    }
+
+    // === Step 2: Deploy the Cloudflare Worker (with real Railway URL if available) ===
+    let worker_main_server = railway_url.clone();
+    let worker_deployed = match push_worker_to_cloudflare(
+        &state, &cf_account_id, &cf_api_token, &worker_name, &workers_subdomain,
+        &worker_main_server, &redirect_uri,
+    ).await {
+        Ok(_url) => {
+            println!("[one-click] Deployed worker: {} (MAIN_SERVER={})", worker_url, worker_main_server);
+            true
+        }
+        Err(e) => {
+            eprintln!("[one-click] Worker deploy failed: {}", e);
+            false
+        }
+    };
+
+    // === Step 3: Auto-deploy Vercel if token provided ===
+    let mut vercel_auto_deployed = false;
+    let mut frontend_url = format!("https://{}-simdia.vercel.app", client_slug);
+
+    if let Some(vercel_token) = &body.vercel_api_token {
+        let vercel_token = vercel_token.trim();
+        if !vercel_token.is_empty() {
+            let vercel_project_name = format!("{}-simdia", client_slug);
+            let vercel_team_id = body.vercel_team_id.as_deref().map(|s| s.trim()).filter(|s| !s.is_empty());
+            let vercel_env_vars = vec![
+                ("NEXT_PUBLIC_API_URL", railway_url.as_str()),
+                ("NEXT_PUBLIC_WORKER_URL", worker_url.as_str()),
+            ];
+            println!("[one-click] Auto-deploying Vercel: {}", vercel_project_name);
+            match deploy_to_vercel(vercel_token, vercel_team_id, &vercel_project_name, &github_repo, &vercel_env_vars).await {
+                Ok(url) => {
+                    println!("[one-click] Vercel auto-deployed: {}", url);
+                    frontend_url = url;
+                    vercel_auto_deployed = true;
+                }
+                Err(e) => {
+                    eprintln!("[one-click] Vercel auto-deploy failed: {}", e);
+                }
+            }
+        }
+    }
+
+    // Generate Vercel env config text (for manual fallback)
     let vercel_env = format!(
         r#"NEXT_PUBLIC_API_URL={}
 NEXT_PUBLIC_WORKER_URL={}"#,
-        api_url,
-        worker_url,
+        railway_url, worker_url,
     );
 
-    // Step 4: Create the admin account in the DB
+    // === Step 4: Create the admin account in the DB ===
     let admin_id = uuid::Uuid::new_v4().to_string();
     let expires_at = Utc::now() + chrono::Duration::days(body.subscription_days as i64);
 
@@ -1545,8 +1814,8 @@ NEXT_PUBLIC_WORKER_URL={}"#,
     .bind(false)
     .bind(expires_at)
     .bind(body.subscription_days)
-    .bind(&api_url)
-    .bind(&frontend_url_placeholder)
+    .bind(&railway_url)
+    .bind(&frontend_url)
     .bind(&worker_url)
     .bind(Utc::now())
     .execute(&state.pool)
@@ -1554,47 +1823,72 @@ NEXT_PUBLIC_WORKER_URL={}"#,
 
     println!("[one-click] Created admin: {} ({})", body.admin_username, admin_id);
 
-    // Manual steps adapt to whether the worker was fully configured.
-    let mut manual_steps = vec![
-        format!("1. Go to Railway Dashboard -> New Project -> Deploy from GitHub -> select simdie/simdiatokens-v2"),
-        format!("2. Set root directory: SimdiaTokens/simdiatokens_server"),
-        format!("3. Add volume: mount path /app/data"),
-        format!("4. Paste the Railway env config below into Railway Variables"),
-        format!("5. Deploy Railway -> copy the generated Railway URL"),
-    ];
-    if real_api_url.is_some() {
-        manual_steps.push(format!("6. (Worker already configured with this URL — no Cloudflare step needed)"));
-        manual_steps.push(format!("7. Go to Vercel Dashboard -> Import Project -> simdie/simdiatokens-v2"));
-        manual_steps.push(format!("8. Set root directory: SimdiaTokens-frontend"));
-        manual_steps.push(format!("9. Paste the Vercel env config below into Vercel Environment Variables"));
-        manual_steps.push(format!("10. Deploy Vercel -> copy the Vercel URL"));
-        manual_steps.push(format!("11. Go to Azure Portal -> App Registration -> Authentication -> Add redirect URI: {}", redirect_uri));
-        manual_steps.push(format!("12. Update the deployment in super admin panel with the actual Vercel URL"));
+    // Build manual steps — only include steps that weren't auto-deployed.
+    let mut step_num = 1;
+    let mut manual_steps: Vec<String> = vec![];
+
+    if !railway_auto_deployed {
+        manual_steps.push(format!("{}. Go to Railway Dashboard -> New Project -> Deploy from GitHub -> select {}", step_num, github_repo));
+        step_num += 1;
+        manual_steps.push(format!("{}. Set root directory: SimdiaTokens/simdiatokens_server", step_num));
+        step_num += 1;
+        manual_steps.push(format!("{}. Add volume: mount path /app/data", step_num));
+        step_num += 1;
+        manual_steps.push(format!("{}. Paste the Railway env config below into Railway Variables", step_num));
+        step_num += 1;
+        manual_steps.push(format!("{}. Deploy Railway -> copy the generated Railway URL", step_num));
+        step_num += 1;
+        if !worker_deployed || body.api_url.is_none() {
+            manual_steps.push(format!("{}. In the super admin panel, click 'Finalize Worker' and paste the Railway URL", step_num));
+            step_num += 1;
+        }
     } else {
-        manual_steps.push(format!("6. In the super admin panel, click 'Finalize Worker' and paste the Railway URL (this re-deploys the Worker with the real MAIN_SERVER)"));
-        manual_steps.push(format!("7. Go to Vercel Dashboard -> Import Project -> simdie/simdiatokens-v2"));
-        manual_steps.push(format!("8. Set root directory: SimdiaTokens-frontend"));
-        manual_steps.push(format!("9. Paste the Vercel env config below into Vercel Environment Variables (replace NEXT_PUBLIC_API_URL with the real Railway URL)"));
-        manual_steps.push(format!("10. Deploy Vercel -> copy the Vercel URL"));
-        manual_steps.push(format!("11. Go to Azure Portal -> App Registration -> Authentication -> Add redirect URI: {}", redirect_uri));
-        manual_steps.push(format!("12. Update the deployment in super admin panel with the actual Railway and Vercel URLs"));
+        manual_steps.push(format!("{}. Railway auto-deployed. Backend URL: {}", step_num, railway_url));
+        step_num += 1;
     }
+
+    if !vercel_auto_deployed {
+        manual_steps.push(format!("{}. Go to Vercel Dashboard -> Import Project -> {}", step_num, github_repo));
+        step_num += 1;
+        manual_steps.push(format!("{}. Set root directory: SimdiaTokens-frontend", step_num));
+        step_num += 1;
+        manual_steps.push(format!("{}. Paste the Vercel env config below into Vercel Environment Variables", step_num));
+        step_num += 1;
+        manual_steps.push(format!("{}. Deploy Vercel -> copy the Vercel URL", step_num));
+        step_num += 1;
+    } else {
+        manual_steps.push(format!("{}. Vercel auto-deployed. Frontend URL: {}", step_num, frontend_url));
+        step_num += 1;
+    }
+
+    manual_steps.push(format!("{}. Go to Azure Portal -> App Registration -> Authentication -> Add redirect URI: {}", step_num, redirect_uri));
 
     let azure_redirect_instructions = format!("Add this redirect URI to Azure AD App Registration: {}", redirect_uri);
 
+    let mut summary = format!("Deployment {} created. Worker {} {}. Admin {} registered.",
+        body.client_name, worker_url, if worker_deployed { "deployed" } else { "failed to deploy" }, body.admin_username);
+    if railway_auto_deployed {
+        summary.push_str(&format!(" Railway auto-deployed: {}.", railway_url));
+    }
+    if vercel_auto_deployed {
+        summary.push_str(&format!(" Vercel auto-deployed: {}.", frontend_url));
+    }
+
     HttpResponse::Ok().json(OneClickDeployResponse {
         success: true,
-        message: format!("Deployment {} created. Worker {} {}. Admin {} registered. Follow the manual steps to complete setup.", body.client_name, worker_url, if worker_deployed { "deployed" } else { "failed to deploy" }, body.admin_username),
+        message: summary,
         worker_url,
         worker_name,
         redirect_uri,
-        frontend_url: frontend_url_placeholder,
-        api_url,
+        frontend_url,
+        api_url: railway_url,
         railway_env_config: railway_env,
         vercel_env_config: vercel_env,
         admin_id,
         azure_redirect_instructions,
         manual_steps,
+        railway_auto_deployed,
+        vercel_auto_deployed,
     })
 }
 
