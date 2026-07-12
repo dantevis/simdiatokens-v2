@@ -1,5 +1,5 @@
 {
-  "buildCommand": "next build",
+  "buildCommand": "rm -rf .next .turbo node_modules/.cache && next build",
   "framework": "nextjs",
   "installCommand": "npm ci",
   "regions": ["iad1"]
