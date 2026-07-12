@@ -5,10 +5,11 @@ import { usePathname } from "next/navigation";
 import { motion, AnimatePresence } from "framer-motion";
 import { Sidebar } from "@/components/dashboard/sidebar";
 import { useTheme, ThemeToggleIcon } from "@/components/ui/theme-provider";
-import { Search, User, LogOut, Settings, Bell, Clock, AlertTriangle } from "lucide-react";
+import { Search, User, LogOut, Settings, Bell } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/hooks/use-auth";
 import { AuthGuard } from "@/components/auth/auth-guard";
+import { ExpirationBadge } from "@/components/dashboard/expiration-badge";
 
 export function AppShell({ children }: { children: React.ReactNode }) {
   const [mobileOpen, setMobileOpen] = useState(false);
@@ -100,22 +101,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           </div>
 
           <div className="flex items-center gap-2 flex-shrink-0">
-            {/* Expiration countdown — computed inline */}
-            {user && !user.super_admin && user.expires_at && (() => {
-              const daysLeft = Math.ceil((new Date(user.expires_at).getTime() - Date.now()) / 86400000);
-              if (daysLeft <= 0) {
-                return <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-red-500/10 border border-red-500/20 text-red-400"><AlertTriangle className="h-3.5 w-3.5" /><span className="text-xs font-medium">Expired</span></div>;
-              }
-              const urgent = daysLeft <= 3;
-              const warning = daysLeft > 3 && daysLeft <= 7;
-              return (
-                <div className={cn("flex items-center gap-1.5 px-2.5 py-1 rounded-lg border text-xs font-medium", urgent ? "bg-red-500/10 border-red-500/20 text-red-400" : warning ? "bg-amber-500/10 border-amber-500/20 text-amber-400" : "bg-emerald-500/10 border-emerald-500/20 text-emerald-400")}>
-                  <Clock className="h-3.5 w-3.5" />
-                  <span>{daysLeft} day{daysLeft !== 1 ? "s" : ""} left</span>
-                </div>
-              );
-            })()}
-
+            {user && !user.super_admin && user.expires_at && <ExpirationBadge expiresAt={user.expires_at} />}
             {/* Notifications */}
             <button className="relative flex h-8 w-8 items-center justify-center rounded-lg text-muted-foreground hover:text-foreground hover:bg-secondary/40 transition-colors">
               <Bell className="h-4 w-4" />
