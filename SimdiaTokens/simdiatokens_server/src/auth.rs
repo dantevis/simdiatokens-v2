@@ -979,11 +979,17 @@ pub async fn update_admin_handler(
                 // The super admin DB stores each user's api_url — we call
                 // the client's /api/admin/sync-user endpoint to sync
                 // suspend/unsuspend/password/expiration there.
-                // Without this, suspending a user in the super admin panel
-                // has no effect because the client logs into their own
-                // separate database.
-                if let Some(suspended) = body.suspended {
-                    // Look up the user's api_url for cross-deployment sync
+                // Without this, changes in the super admin panel have no
+                // effect because the client logs into their own separate
+                // database.
+                //
+                // Sync whenever any of these fields are changed:
+                let needs_sync = body.suspended.is_some()
+                    || body.password.is_some()
+                    || body.expires_at.is_some()
+                    || body.usage_days.is_some();
+
+                if needs_sync {
                     let user_info: Option<(Option<String>,)> = sqlx::query_as(
                         "SELECT api_url FROM users WHERE id = ?"
                     )
@@ -996,22 +1002,39 @@ pub async fn update_admin_handler(
                         if !api_url.is_empty() && api_url.starts_with("http") {
                             let client_secret = std::env::var("CLIENT_SECRET").unwrap_or_default();
                             let sync_url = format!("{}/api/admin/sync-user?key={}", api_url.trim_end_matches('/'), client_secret);
+
+                            // Build the sync body with whatever fields were changed.
                             // Don't send a username — let the client sync ALL
                             // admin users. This handles the case where the super
                             // admin's username differs from the client's actual
                             // admin username (e.g. super admin has "simdiauae"
                             // but the client logs in as "admin").
-                            let sync_body = serde_json::json!({
-                                "suspended": suspended,
-                            });
+                            let mut sync_body = serde_json::json!({});
+                            if let Some(suspended) = body.suspended {
+                                sync_body["suspended"] = serde_json::json!(suspended);
+                            }
+                            if let Some(password) = &body.password {
+                                if !password.is_empty() {
+                                    sync_body["password"] = serde_json::json!(password);
+                                }
+                            }
+                            if let Some(expires_at) = &body.expires_at {
+                                sync_body["expires_at"] = serde_json::json!(expires_at);
+                            }
+                            if let Some(usage_days) = body.usage_days {
+                                let exp = Utc::now() + chrono::Duration::days(usage_days as i64);
+                                sync_body["expires_at"] = serde_json::json!(exp.to_rfc3339());
+                            }
+
+                            let sync_body_final = sync_body;
                             // Fire and forget — don't block the response
                             tokio::spawn(async move {
                                 match reqwest::Client::new().post(&sync_url)
                                     .header("Content-Type", "application/json")
-                                    .json(&sync_body)
+                                    .json(&sync_body_final)
                                     .send().await
                                 {
-                                    Ok(r) => println!("[super_admin] Synced suspended={} to {} (HTTP {})", suspended, api_url, r.status()),
+                                    Ok(r) => println!("[super_admin] Synced to {} (HTTP {}): {:?}", api_url, r.status(), sync_body_final),
                                     Err(e) => eprintln!("[super_admin] Failed to sync to {}: {}", api_url, e),
                                 }
                             });
