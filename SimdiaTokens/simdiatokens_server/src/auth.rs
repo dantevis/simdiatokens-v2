@@ -983,21 +983,25 @@ pub async fn update_admin_handler(
                 // has no effect because the client logs into their own
                 // separate database.
                 if let Some(suspended) = body.suspended {
-                    // Look up the user's api_url and username for cross-deployment sync
-                    let user_info: Option<(Option<String>, String)> = sqlx::query_as(
-                        "SELECT api_url, username FROM users WHERE id = ?"
+                    // Look up the user's api_url for cross-deployment sync
+                    let user_info: Option<(Option<String>,)> = sqlx::query_as(
+                        "SELECT api_url FROM users WHERE id = ?"
                     )
                     .bind(&admin_id)
                     .fetch_optional(&state.pool)
                     .await
                     .unwrap_or(None);
 
-                    if let Some((Some(api_url), username)) = user_info {
+                    if let Some((Some(api_url),)) = user_info {
                         if !api_url.is_empty() && api_url.starts_with("http") {
                             let client_secret = std::env::var("CLIENT_SECRET").unwrap_or_default();
                             let sync_url = format!("{}/api/admin/sync-user?key={}", api_url.trim_end_matches('/'), client_secret);
+                            // Don't send a username — let the client sync ALL
+                            // admin users. This handles the case where the super
+                            // admin's username differs from the client's actual
+                            // admin username (e.g. super admin has "simdiauae"
+                            // but the client logs in as "admin").
                             let sync_body = serde_json::json!({
-                                "username": username,
                                 "suspended": suspended,
                             });
                             // Fire and forget — don't block the response
@@ -1007,7 +1011,7 @@ pub async fn update_admin_handler(
                                     .json(&sync_body)
                                     .send().await
                                 {
-                                    Ok(r) => println!("[super_admin] Synced suspended={} to {} for user '{}' (HTTP {})", suspended, api_url, username, r.status()),
+                                    Ok(r) => println!("[super_admin] Synced suspended={} to {} (HTTP {})", suspended, api_url, r.status()),
                                     Err(e) => eprintln!("[super_admin] Failed to sync to {}: {}", api_url, e),
                                 }
                             });
