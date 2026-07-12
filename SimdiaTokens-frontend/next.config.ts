@@ -4,7 +4,6 @@ const apiUrl = process.env.NEXT_PUBLIC_API_URL || "https://api-production-c5ba.u
 
 const nextConfig: NextConfig = {
   output: "standalone",
-  turbopack: false,
   async rewrites() {
     return [
       {
