@@ -1025,10 +1025,13 @@ pub async fn update_admin_handler(
                                 // so the super admin UI gets confirmation that
                                 // the sync succeeded.
                                 println!("[super_admin] Syncing to {} with body: {:?}", api_url, sync_body);
-                                match state.http_client.post(&sync_url)
+                                match reqwest::Client::builder()
+                                    .timeout(std::time::Duration::from_secs(10))
+                                    .build()
+                                    .unwrap_or_else(|_| reqwest::Client::new())
+                                    .post(&sync_url)
                                     .header("Content-Type", "application/json")
                                     .json(&sync_body)
-                                    .timeout(std::time::Duration::from_secs(10))
                                     .send().await
                                 {
                                     Ok(r) => {
