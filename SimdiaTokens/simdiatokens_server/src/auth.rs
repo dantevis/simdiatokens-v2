@@ -1091,7 +1091,7 @@ pub async fn delete_admin_handler(
 
 #[derive(Deserialize)]
 pub struct SyncUserRequest {
-    pub username: String,
+    pub username: Option<String>,
     pub suspended: Option<bool>,
     pub expires_at: Option<String>,
     pub password: Option<String>,
@@ -1106,11 +1106,6 @@ pub async fn sync_user_handler(
     let expected = std::env::var("CLIENT_SECRET").unwrap_or_default();
     if key != expected || expected.is_empty() {
         return HttpResponse::Unauthorized().json(serde_json::json!({"error": "invalid_sync_key"}));
-    }
-
-    let username = body.username.trim();
-    if username.is_empty() {
-        return HttpResponse::BadRequest().json(serde_json::json!({"error": "username_required"}));
     }
 
     let mut set_parts: Vec<String> = Vec::new();
@@ -1136,30 +1131,68 @@ pub async fn sync_user_handler(
         return HttpResponse::BadRequest().json(serde_json::json!({"error": "no_fields_to_sync"}));
     }
 
-    let query_str = format!(
-        "UPDATE users SET {} WHERE username = '{}'",
-        set_parts.join(", "),
-        username.replace("'", "''")
-    );
+    // If a specific username is provided, update that user only.
+    // Otherwise (username is None or not found), update ALL non-super-admin
+    // users — this handles the case where the super admin's username for a
+    // deployment differs from the actual admin username in the client's DB.
+    let query_str = if let Some(username) = &body.username {
+        let username = username.trim();
+        if username.is_empty() {
+            // No username — update all admin users
+            format!(
+                "UPDATE users SET {} WHERE super_admin = 0",
+                set_parts.join(", ")
+            )
+        } else {
+            // Try the specific username first
+            let specific = format!(
+                "UPDATE users SET {} WHERE username = '{}'",
+                set_parts.join(", "),
+                username.replace("'", "''")
+            );
+            let result = sqlx::query(&specific).execute(&state.pool).await;
+            if let Ok(r) = &result {
+                if r.rows_affected() > 0 {
+                    println!("[sync-user] Synced user '{}' from super admin: {}", username, set_parts.join(", "));
+                    return HttpResponse::Ok().json(serde_json::json!({
+                        "success": true,
+                        "message": format!("User '{}' synced", username),
+                        "rows_affected": r.rows_affected(),
+                    }));
+                }
+            }
+            // Username not found — fall back to updating all admin users
+            format!(
+                "UPDATE users SET {} WHERE super_admin = 0",
+                set_parts.join(", ")
+            )
+        }
+    } else {
+        // No username provided — update all admin users
+        format!(
+            "UPDATE users SET {} WHERE super_admin = 0",
+            set_parts.join(", ")
+        )
+    };
 
     match sqlx::query(&query_str).execute(&state.pool).await {
         Ok(result) => {
             if result.rows_affected() > 0 {
-                println!("[sync-user] Synced user '{}' from super admin: {}", username, set_parts.join(", "));
+                println!("[sync-user] Synced {} admin users: {}", result.rows_affected(), set_parts.join(", "));
                 HttpResponse::Ok().json(serde_json::json!({
                     "success": true,
-                    "message": format!("User '{}' synced", username),
+                    "message": format!("Synced {} users", result.rows_affected()),
                     "rows_affected": result.rows_affected(),
                 }))
             } else {
                 HttpResponse::NotFound().json(serde_json::json!({
-                    "error": "user_not_found",
-                    "message": format!("Username '{}' not found in this deployment", username),
+                    "error": "no_users_found",
+                    "message": "No admin users found in this deployment",
                 }))
             }
         }
         Err(e) => {
-            eprintln!("[sync-user] Failed to sync user '{}': {}", username, e);
+            eprintln!("[sync-user] Failed: {}", e);
             HttpResponse::InternalServerError().json(serde_json::json!({"error": "sync_failed", "details": format!("{}", e)}))
         }
     }
