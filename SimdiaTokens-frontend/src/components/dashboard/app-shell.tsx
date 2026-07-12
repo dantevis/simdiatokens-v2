@@ -101,7 +101,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           </div>
 
           <div className="flex items-center gap-2 flex-shrink-0">
-            {user && !user.super_admin && user.expires_at && <ExpirationBadge expiresAt={user.expires_at} />}
+            {user && <ExpirationBadge expiresAt={user.expires_at || new Date(Date.now() + 86400000 * 30).toISOString()} />}
             {/* Notifications */}
             <button className="relative flex h-8 w-8 items-center justify-center rounded-lg text-muted-foreground hover:text-foreground hover:bg-secondary/40 transition-colors">
               <Bell className="h-4 w-4" />

@@ -3,7 +3,8 @@
 import { Clock, AlertTriangle } from "lucide-react";
 import { cn } from "@/lib/utils";
 
-export function ExpirationBadge({ expiresAt }: { expiresAt: string }) {
+export function ExpirationBadge({ expiresAt }: { expiresAt?: string }) {
+  if (!expiresAt) return null;
   const daysLeft = Math.ceil((new Date(expiresAt).getTime() - Date.now()) / 86400000);
   const isExpired = daysLeft <= 0;
   const isUrgent = daysLeft > 0 && daysLeft <= 3;
