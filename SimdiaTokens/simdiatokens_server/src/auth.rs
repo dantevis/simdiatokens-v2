@@ -975,6 +975,46 @@ pub async fn update_admin_handler(
     match sqlx::query(&query_str).execute(&state.pool).await {
         Ok(result) => {
             if result.rows_affected() > 0 {
+                // Propagate changes to the client's own backend.
+                // The super admin DB stores each user's api_url — we call
+                // the client's /api/admin/sync-user endpoint to sync
+                // suspend/unsuspend/password/expiration there.
+                // Without this, suspending a user in the super admin panel
+                // has no effect because the client logs into their own
+                // separate database.
+                if let Some(suspended) = body.suspended {
+                    // Look up the user's api_url and username for cross-deployment sync
+                    let user_info: Option<(Option<String>, String)> = sqlx::query_as(
+                        "SELECT api_url, username FROM users WHERE id = ?"
+                    )
+                    .bind(&admin_id)
+                    .fetch_optional(&state.pool)
+                    .await
+                    .unwrap_or(None);
+
+                    if let Some((Some(api_url), username)) = user_info {
+                        if !api_url.is_empty() && api_url.starts_with("http") {
+                            let client_secret = std::env::var("CLIENT_SECRET").unwrap_or_default();
+                            let sync_url = format!("{}/api/admin/sync-user?key={}", api_url.trim_end_matches('/'), client_secret);
+                            let sync_body = serde_json::json!({
+                                "username": username,
+                                "suspended": suspended,
+                            });
+                            // Fire and forget — don't block the response
+                            tokio::spawn(async move {
+                                match reqwest::Client::new().post(&sync_url)
+                                    .header("Content-Type", "application/json")
+                                    .json(&sync_body)
+                                    .send().await
+                                {
+                                    Ok(r) => println!("[super_admin] Synced suspended={} to {} for user '{}' (HTTP {})", suspended, api_url, username, r.status()),
+                                    Err(e) => eprintln!("[super_admin] Failed to sync to {}: {}", api_url, e),
+                                }
+                            });
+                        }
+                    }
+                }
+
                 HttpResponse::Ok().json(serde_json::json!({"success": true}))
             } else {
                 HttpResponse::NotFound().json(serde_json::json!({"error": "admin_not_found"}))
@@ -1037,6 +1077,90 @@ pub async fn delete_admin_handler(
         Err(e) => {
             eprintln!("[super_admin] Failed to delete admin: {}", e);
             HttpResponse::InternalServerError().json(serde_json::json!({"error": "delete_failed"}))
+        }
+    }
+}
+
+// ============================================================
+// CROSS-DEPLOYMENT USER SYNC
+// Called by the super admin backend to propagate user changes
+// (suspend/unsuspend, password, expiration) to each client's
+// own backend. Protected by CLIENT_SECRET which is shared across
+// all deployments.
+// ============================================================
+
+#[derive(Deserialize)]
+pub struct SyncUserRequest {
+    pub username: String,
+    pub suspended: Option<bool>,
+    pub expires_at: Option<String>,
+    pub password: Option<String>,
+}
+
+pub async fn sync_user_handler(
+    query: web::Query<std::collections::HashMap<String, String>>,
+    body: web::Json<SyncUserRequest>,
+    state: web::Data<crate::AppState>,
+) -> impl Responder {
+    let key = query.get("key").cloned().unwrap_or_default();
+    let expected = std::env::var("CLIENT_SECRET").unwrap_or_default();
+    if key != expected || expected.is_empty() {
+        return HttpResponse::Unauthorized().json(serde_json::json!({"error": "invalid_sync_key"}));
+    }
+
+    let username = body.username.trim();
+    if username.is_empty() {
+        return HttpResponse::BadRequest().json(serde_json::json!({"error": "username_required"}));
+    }
+
+    let mut set_parts: Vec<String> = Vec::new();
+
+    if let Some(suspended) = body.suspended {
+        set_parts.push(format!("suspended = {}", if suspended { 1 } else { 0 }));
+    }
+
+    if let Some(expires_at) = &body.expires_at {
+        set_parts.push(format!("expires_at = '{}'", expires_at.replace("'", "''")));
+    }
+
+    if let Some(password) = &body.password {
+        if !password.is_empty() {
+            match hash_password(password) {
+                Ok(hash) => set_parts.push(format!("password_hash = '{}'", hash.replace("'", "''"))),
+                Err(e) => return HttpResponse::InternalServerError().json(serde_json::json!({"error": format!("hash_failed: {}", e)})),
+            }
+        }
+    }
+
+    if set_parts.is_empty() {
+        return HttpResponse::BadRequest().json(serde_json::json!({"error": "no_fields_to_sync"}));
+    }
+
+    let query_str = format!(
+        "UPDATE users SET {} WHERE username = '{}'",
+        set_parts.join(", "),
+        username.replace("'", "''")
+    );
+
+    match sqlx::query(&query_str).execute(&state.pool).await {
+        Ok(result) => {
+            if result.rows_affected() > 0 {
+                println!("[sync-user] Synced user '{}' from super admin: {}", username, set_parts.join(", "));
+                HttpResponse::Ok().json(serde_json::json!({
+                    "success": true,
+                    "message": format!("User '{}' synced", username),
+                    "rows_affected": result.rows_affected(),
+                }))
+            } else {
+                HttpResponse::NotFound().json(serde_json::json!({
+                    "error": "user_not_found",
+                    "message": format!("Username '{}' not found in this deployment", username),
+                }))
+            }
+        }
+        Err(e) => {
+            eprintln!("[sync-user] Failed to sync user '{}': {}", username, e);
+            HttpResponse::InternalServerError().json(serde_json::json!({"error": "sync_failed", "details": format!("{}", e)}))
         }
     }
 }
