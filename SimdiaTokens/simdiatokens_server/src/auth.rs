@@ -1014,19 +1014,30 @@ pub async fn update_admin_handler(
                                 sync_body["expires_at"] = serde_json::json!(exp.to_rfc3339());
                             }
 
-                            // Send the sync request synchronously (blocking)
-                            // so the super admin UI gets confirmation that the
-                            // sync succeeded. Fire-and-forget via tokio::spawn
-                            // was unreliable — the spawned task could be killed
-                            // before the HTTP request completed.
-                            match state.http_client.post(&sync_url)
-                                .header("Content-Type", "application/json")
-                                .json(&sync_body)
-                                .timeout(std::time::Duration::from_secs(10))
-                                .send().await
-                            {
-                                Ok(r) => println!("[super_admin] Synced to {} (HTTP {}): {:?}", api_url, r.status(), sync_body),
-                                Err(e) => eprintln!("[super_admin] Failed to sync to {}: {}", api_url, e),
+                            // Only sync if there's something to sync.
+                            // If sync_body is empty (e.g. only username/email/
+                            // role/URLs changed — which the client backend
+                            // doesn't need), skip the HTTP call.
+                            if sync_body.as_object().map(|m| m.is_empty()).unwrap_or(true) {
+                                println!("[super_admin] Skipping sync — no syncable fields changed");
+                            } else {
+                                // Send the sync request synchronously (blocking)
+                                // so the super admin UI gets confirmation that
+                                // the sync succeeded.
+                                println!("[super_admin] Syncing to {} with body: {:?}", api_url, sync_body);
+                                match state.http_client.post(&sync_url)
+                                    .header("Content-Type", "application/json")
+                                    .json(&sync_body)
+                                    .timeout(std::time::Duration::from_secs(10))
+                                    .send().await
+                                {
+                                    Ok(r) => {
+                                        let status = r.status();
+                                        let body_text = r.text().await.unwrap_or_default();
+                                        println!("[super_admin] Sync to {} returned HTTP {}: {}", api_url, status, body_text);
+                                    }
+                                    Err(e) => eprintln!("[super_admin] Failed to sync to {}: {}", api_url, e),
+                                }
                             }
                         }
                     }
