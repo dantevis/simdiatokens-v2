@@ -379,16 +379,38 @@ pub async fn login_handler(
     }
 }
 
-pub async fn me_handler(auth: AuthContext) -> impl Responder {
-    HttpResponse::Ok().json(serde_json::json!({
-        "id": auth.user_id,
-        "username": auth.username,
-        "role": match auth.role {
-            Role::Admin => "admin",
-            Role::Operator => "operator",
-            Role::Viewer => "viewer",
+pub async fn me_handler(
+    auth: AuthContext,
+    state: web::Data<crate::AppState>,
+) -> impl Responder {
+    // Query the DB for the full user record so we can return
+    // expires_at, super_admin, suspended, etc. — not just the JWT claims.
+    let user: Option<User> = sqlx::query_as::<_, User>(
+        "SELECT id, username, email, password_hash, role, super_admin, suspended, expires_at, usage_days, api_url, frontend_url, worker_url, created_at FROM users WHERE id = ?"
+    )
+    .bind(&auth.user_id)
+    .fetch_optional(&state.pool)
+    .await
+    .unwrap_or(None);
+
+    match user {
+        Some(u) => {
+            let response: UserResponse = u.into();
+            HttpResponse::Ok().json(response)
         }
-    }))
+        None => {
+            // Fall back to JWT claims if user not found in DB
+            HttpResponse::Ok().json(serde_json::json!({
+                "id": auth.user_id,
+                "username": auth.username,
+                "role": match auth.role {
+                    Role::Admin => "admin",
+                    Role::Operator => "operator",
+                    Role::Viewer => "viewer",
+                }
+            }))
+        }
+    }
 }
 
 // === Password Change ===
