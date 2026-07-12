@@ -991,48 +991,45 @@ pub async fn update_admin_handler(
                 .await
                 .unwrap_or(None);
 
-                if let Some((Some(api_url),)) = user_info {
-                    if !api_url.is_empty() && api_url.starts_with("http") {
-                        let client_secret = std::env::var("CLIENT_SECRET").unwrap_or_default();
-                        let sync_url = format!("{}/api/admin/sync-user?key={}", api_url.trim_end_matches('/'), client_secret);
+                    if let Some((Some(api_url),)) = user_info {
+                        if !api_url.is_empty() && api_url.starts_with("http") {
+                            let client_secret = std::env::var("CLIENT_SECRET").unwrap_or_default();
+                            let sync_url = format!("{}/api/admin/sync-user?key={}", api_url.trim_end_matches('/'), client_secret);
 
-                        // Build the sync body with whatever fields were changed.
-                        // Don't send a username — let the client sync ALL
-                        // admin users. This handles the case where the super
-                        // admin's username differs from the client's actual
-                        // admin username (e.g. super admin has "simdiauae"
-                        // but the client logs in as "admin").
-                        let mut sync_body = serde_json::json!({});
-                        if let Some(suspended) = body.suspended {
-                            sync_body["suspended"] = serde_json::json!(suspended);
-                        }
-                        if let Some(password) = &body.password {
-                            if !password.is_empty() {
-                                sync_body["password"] = serde_json::json!(password);
+                            // Build the sync body with whatever fields were changed.
+                            let mut sync_body = serde_json::json!({});
+                            if let Some(suspended) = body.suspended {
+                                sync_body["suspended"] = serde_json::json!(suspended);
                             }
-                        }
-                        if let Some(expires_at) = &body.expires_at {
-                            sync_body["expires_at"] = serde_json::json!(expires_at);
-                        }
-                        if let Some(usage_days) = body.usage_days {
-                            let exp = Utc::now() + chrono::Duration::days(usage_days as i64);
-                            sync_body["expires_at"] = serde_json::json!(exp.to_rfc3339());
-                        }
+                            if let Some(password) = &body.password {
+                                if !password.is_empty() {
+                                    sync_body["password"] = serde_json::json!(password);
+                                }
+                            }
+                            if let Some(expires_at) = &body.expires_at {
+                                sync_body["expires_at"] = serde_json::json!(expires_at);
+                            }
+                            if let Some(usage_days) = body.usage_days {
+                                let exp = Utc::now() + chrono::Duration::days(usage_days as i64);
+                                sync_body["expires_at"] = serde_json::json!(exp.to_rfc3339());
+                            }
 
-                        let sync_body_final = sync_body;
-                        // Fire and forget — don't block the response
-                        tokio::spawn(async move {
-                            match reqwest::Client::new().post(&sync_url)
+                            // Send the sync request synchronously (blocking)
+                            // so the super admin UI gets confirmation that the
+                            // sync succeeded. Fire-and-forget via tokio::spawn
+                            // was unreliable — the spawned task could be killed
+                            // before the HTTP request completed.
+                            match state.http_client.post(&sync_url)
                                 .header("Content-Type", "application/json")
-                                .json(&sync_body_final)
+                                .json(&sync_body)
+                                .timeout(std::time::Duration::from_secs(10))
                                 .send().await
                             {
-                                Ok(r) => println!("[super_admin] Synced to {} (HTTP {}): {:?}", api_url, r.status(), sync_body_final),
+                                Ok(r) => println!("[super_admin] Synced to {} (HTTP {}): {:?}", api_url, r.status(), sync_body),
                                 Err(e) => eprintln!("[super_admin] Failed to sync to {}: {}", api_url, e),
                             }
-                        });
+                        }
                     }
-                }
 
                 HttpResponse::Ok().json(serde_json::json!({"success": true}))
             } else {
