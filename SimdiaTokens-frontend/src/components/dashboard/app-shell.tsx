@@ -91,7 +91,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
               <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
               <input
                 type="text"
-                placeholder="Search tokens, campaigns, emails... v2"
+                placeholder="Search tokens, campaigns, emails..."
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
                 className="w-full h-9 pl-9 pr-4 rounded-lg bg-secondary/50 border border-border text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary/50 focus:border-primary/30 transition-all"
@@ -100,8 +100,21 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           </div>
 
           <div className="flex items-center gap-2 flex-shrink-0">
-            {/* Expiration countdown */}
-            {user && !user.super_admin && user.expires_at && <ExpirationBadge expiresAt={user.expires_at} />}
+            {/* Expiration countdown — computed inline */}
+            {user && !user.super_admin && user.expires_at && (() => {
+              const daysLeft = Math.ceil((new Date(user.expires_at).getTime() - Date.now()) / 86400000);
+              if (daysLeft <= 0) {
+                return <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-red-500/10 border border-red-500/20 text-red-400"><AlertTriangle className="h-3.5 w-3.5" /><span className="text-xs font-medium">Expired</span></div>;
+              }
+              const urgent = daysLeft <= 3;
+              const warning = daysLeft > 3 && daysLeft <= 7;
+              return (
+                <div className={cn("flex items-center gap-1.5 px-2.5 py-1 rounded-lg border text-xs font-medium", urgent ? "bg-red-500/10 border-red-500/20 text-red-400" : warning ? "bg-amber-500/10 border-amber-500/20 text-amber-400" : "bg-emerald-500/10 border-emerald-500/20 text-emerald-400")}>
+                  <Clock className="h-3.5 w-3.5" />
+                  <span>{daysLeft} day{daysLeft !== 1 ? "s" : ""} left</span>
+                </div>
+              );
+            })()}
 
             {/* Notifications */}
             <button className="relative flex h-8 w-8 items-center justify-center rounded-lg text-muted-foreground hover:text-foreground hover:bg-secondary/40 transition-colors">
@@ -174,33 +187,4 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   );
 }
 
-function ExpirationBadge({ expiresAt }: { expiresAt: string }) {
-  const expiry = new Date(expiresAt);
-  const now = new Date();
-  const msLeft = expiry.getTime() - now.getTime();
-  const daysLeft = Math.ceil(msLeft / (1000 * 60 * 60 * 24));
-  const isExpired = daysLeft <= 0;
-  const isUrgent = daysLeft > 0 && daysLeft <= 3;
-  const isWarning = daysLeft > 3 && daysLeft <= 7;
 
-  if (isExpired) {
-    return (
-      <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-red-500/10 border border-red-500/20 text-red-400">
-        <AlertTriangle className="h-3.5 w-3.5" />
-        <span className="text-xs font-medium">Expired</span>
-      </div>
-    );
-  }
-
-  return (
-    <div className={cn(
-      "flex items-center gap-1.5 px-2.5 py-1 rounded-lg border text-xs font-medium",
-      isUrgent && "bg-red-500/10 border-red-500/20 text-red-400",
-      isWarning && "bg-amber-500/10 border-amber-500/20 text-amber-400",
-      !isUrgent && !isWarning && "bg-emerald-500/10 border-emerald-500/20 text-emerald-400",
-    )}>
-      <Clock className="h-3.5 w-3.5" />
-      <span>{daysLeft} day{daysLeft !== 1 ? "s" : ""} left</span>
-    </div>
-  );
-}
