@@ -9,7 +9,6 @@ import { Search, User, LogOut, Settings, Bell } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/hooks/use-auth";
 import { AuthGuard } from "@/components/auth/auth-guard";
-import { ExpirationBadge } from "@/components/dashboard/expiration-badge";
 
 export function AppShell({ children }: { children: React.ReactNode }) {
   const [mobileOpen, setMobileOpen] = useState(false);
@@ -101,9 +100,18 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           </div>
 
           <div className="flex items-center gap-2 flex-shrink-0">
-            {user && <ExpirationBadge expiresAt={user.expires_at || new Date(Date.now() + 86400000 * 30).toISOString()} />}
-            {/* Expiration badge test marker visible during SSR */}
-            {user && <span data-exp-badge="true" className="hidden" />}
+            {user && !user.super_admin && user.expires_at && (
+              <span className={cn("text-xs font-medium px-2.5 py-1 rounded-lg border",
+                (Math.ceil((new Date(user.expires_at).getTime() - Date.now()) / 86400000) <= 0) ? "bg-red-500/10 border-red-500/20 text-red-400" :
+                (Math.ceil((new Date(user.expires_at).getTime() - Date.now()) / 86400000) <= 3) ? "bg-red-500/10 border-red-500/20 text-red-400" :
+                (Math.ceil((new Date(user.expires_at).getTime() - Date.now()) / 86400000) <= 7) ? "bg-amber-500/10 border-amber-500/20 text-amber-400" :
+                "bg-emerald-500/10 border-emerald-500/20 text-emerald-400"
+              )}>
+                {Math.ceil((new Date(user.expires_at).getTime() - Date.now()) / 86400000) <= 0
+                  ? "Expired"
+                  : `${Math.ceil((new Date(user.expires_at).getTime() - Date.now()) / 86400000)} days left`}
+              </span>
+            )}
             {/* Notifications */}
             <button className="relative flex h-8 w-8 items-center justify-center rounded-lg text-muted-foreground hover:text-foreground hover:bg-secondary/40 transition-colors">
               <Bell className="h-4 w-4" />
