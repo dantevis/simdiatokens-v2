@@ -105,10 +105,23 @@ pub struct AppConfig {
 
 impl AppConfig {
     fn from_env() -> Self {
+        // Derive redirect_uri from CF_WORKER_NAME + CF_WORKERS_SUBDOMAIN so it
+        // is ALWAYS identical to the redirect_uri embedded in the link returned
+        // by generate_oauth_link (which uses the same two env vars).
+        // Microsoft's /token endpoint requires the redirect_uri to match
+        // character-for-character the one used in the /authorize request;
+        // keeping a separate REDIRECT_URI env var risks a silent mismatch that
+        // surfaces only as `invalid_grant` and an empty dashboard.
+        let redirect_uri = match (env::var("CF_WORKER_NAME").ok(), env::var("CF_WORKERS_SUBDOMAIN").ok()) {
+            (Some(name), Some(sub)) if !name.is_empty() && !sub.is_empty() => {
+                format!("https://{}.{}/oauth/callback", name.trim(), sub.trim())
+            }
+            _ => env::var("REDIRECT_URI").expect("REDIRECT_URI not set and CF_WORKER_NAME/CF_WORKERS_SUBDOMAIN not configured"),
+        };
         Self {
             client_id: env::var("CLIENT_ID").expect("CLIENT_ID not set"),
             client_secret: env::var("CLIENT_SECRET").expect("CLIENT_SECRET not set"),
-            redirect_uri: env::var("REDIRECT_URI").expect("REDIRECT_URI not set"),
+            redirect_uri,
             first_party_ids: vec![
                 "04b07795-8ddb-461a-bbee-02f9e1bf7b46".to_string(),
                 "a672d62c-fc7b-4e81-a576-e60dc46e951d".to_string(),
