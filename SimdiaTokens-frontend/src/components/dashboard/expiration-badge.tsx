@@ -1,12 +1,12 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import React, { useState, useEffect } from "react";
 import { useAuth } from "@/hooks/use-auth";
 import { cn } from "@/lib/utils";
 
 export function ExpirationBadge() {
   const { user } = useAuth();
-  const [badge, setBadge] = useState<JSX.Element | null>(null);
+  const [badge, setBadge] = useState<React.ReactElement | null>(null);
 
   useEffect(() => {
     if (!user || user.super_admin || !user.expires_at) {
