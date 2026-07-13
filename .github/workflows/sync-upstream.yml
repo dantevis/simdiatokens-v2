@@ -1,0 +1,35 @@
+name: Sync from upstream
+
+# This workflow keeps forks of simdie/simdiatokens-v2 up to date with
+# the upstream `main` branch. Fork owners should enable Actions on
+# their fork so the cron schedule fires; the default GITHUB_TOKEN has
+# push permission to the fork's own repo.
+#
+# Fork owners: after the first sync that brings this file into your
+# fork, enable Actions (Actions tab -> "I understand my workflows,
+# go ahead and enable them"). Then this cron picks up new upstream
+# commits and fast-forwards your fork's `main`, which triggers Vercel
+# to deploy.
+
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Sync with upstream
+        run: |
+          git remote add upstream https://github.com/simdie/simdiatokens-v2.git
+          git fetch upstream main
+          git merge --ff-only upstream/main
+          git push
