@@ -349,6 +349,8 @@ export interface AuthUser {
   super_admin?: boolean;
   suspended?: boolean;
   expires_at?: string;
+  usage_days?: number;
+  created_at?: string;
 }
 
 export interface LoginRequest {
