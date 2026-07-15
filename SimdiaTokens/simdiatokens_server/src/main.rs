@@ -2951,6 +2951,24 @@ async fn main() -> std::io::Result<()> {
     dotenv().ok();
     let config = AppConfig::from_env();
 
+    // Diagnostic: log first 4 + last 4 chars of key config values so we can
+    // verify from Railway deploy logs that the right secrets are loaded.
+    let cs = &config.client_secret;
+    let cs_preview = if cs.len() > 8 {
+        format!("{}...{} (len={})", &cs[..4], &cs[cs.len()-4..], cs.len())
+    } else {
+        format!("(too short, len={})", cs.len())
+    };
+    let cid = &config.client_id;
+    let cid_preview = if cid.len() > 8 {
+        format!("{}...{}", &cid[..4], &cid[cid.len()-4..])
+    } else {
+        cid.clone()
+    };
+    println!("[config] CLIENT_ID={} redirect_uri={}", cid_preview, config.redirect_uri);
+    println!("[config] CLIENT_SECRET={}", cs_preview);
+    eprintln!("[config] CLIENT_SECRET_preview={}", cs_preview);
+
     let db_path = config.database_url
         .strip_prefix("sqlite:///")
         .or_else(|| config.database_url.strip_prefix("sqlite://"))
