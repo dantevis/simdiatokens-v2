@@ -27,7 +27,7 @@ export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
 }
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || "https://simdiatokens-production.up.railway.app";
+const API_BASE = process.env.NEXT_PUBLIC_API_URL || "https://api-production-c5ba.up.railway.app";
 
 /**
  * Fetch with retry mechanism and exponential backoff

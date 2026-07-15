@@ -1,10 +1,9 @@
-/target
-**/*.rs.bk
-.git
-.gitignore
+# Prevent local .env and secret files from leaking into the Docker image.
+# Railway injects env vars at runtime; these files are for local dev only.
 .env
-.railway.env
-.wrangler.env
-*.db
-*.db-journal
-node_modules
+.env.*
+.client_secret
+*.local
+
+# Build artifacts
+target/

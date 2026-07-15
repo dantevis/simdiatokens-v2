@@ -3,6 +3,7 @@
 .env.local
 .railway.env
 .wrangler.env
+.client_secret
 *.pem
 *.key
 
