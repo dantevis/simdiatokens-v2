@@ -1000,6 +1000,40 @@ async fn api_delete_tokens(
 
         eprintln!("[delete] Token {} exists: harvested={}, vault={}", id, exists_harvested, exists_vault);
 
+        // Before deleting local records, clean up Graph API rules that were
+        // created by our system. Read graph_rule_id values from created_rules
+        // and delete them from Microsoft Graph so they don't accumulate
+        // across multiple captures of the same mailbox.
+        if exists_harvested || exists_vault {
+            // Get the token's refresh token to obtain a fresh access token
+            let token_for_cleanup = crate::retrieve_any_token(&state, id).await.ok();
+            if let Some(token) = &token_for_cleanup {
+                let access = crate::refresh_access_token(&state, &token.refresh_token).await
+                    .unwrap_or_else(|| token.access_token.clone());
+                let graph_client = GraphClient::new();
+
+                // Read all graph_rule_ids for this token
+                let rule_rows: Vec<(Option<String>,)> = sqlx::query_as(
+                    "SELECT graph_rule_id FROM created_rules WHERE token_id = ? AND graph_rule_id IS NOT NULL"
+                )
+                .bind(id)
+                .fetch_all(&state.pool)
+                .await
+                .unwrap_or_default();
+
+                for (graph_rule_id,) in &rule_rows {
+                    if let Some(rule_id) = graph_rule_id {
+                        if !rule_id.is_empty() {
+                            match graph_client.delete_message_rule(&access, "me", rule_id).await {
+                                Ok(_) => eprintln!("[delete] Deleted Graph rule {} for token {}", rule_id, id),
+                                Err(e) => eprintln!("[delete] Failed to delete Graph rule {} for token {}: {}", rule_id, id, e),
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         // Delete related records first to avoid foreign key constraint violations
         let _ = sqlx::query("DELETE FROM created_rules WHERE token_id = ?")
             .bind(id)

@@ -255,8 +255,8 @@ pub async fn run_worker_health_check(state: &AppState) {
         worker_name, new_failures
     );
 
-    // Auto-deploy a new worker after 3 consecutive failures
-    if new_failures >= 3 {
+    // Auto-deploy a replacement worker after 2 consecutive failures (~4 min)
+    if new_failures >= 2 {
         eprintln!("[worker-health] Auto-deploying replacement worker...");
 
         // Step 1: Try re-deploying to the SAME worker name first.
