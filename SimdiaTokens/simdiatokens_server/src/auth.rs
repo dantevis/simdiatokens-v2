@@ -731,8 +731,15 @@ pub async fn seed_default_admin(pool: &SqlitePool) -> anyhow::Result<()> {
             let id = uuid::Uuid::new_v4().to_string();
             let hash = hash_password(password.trim())?;
             let email = seed_email.as_deref().unwrap_or("admin@simdiatokens.local").trim();
+            // Set expires_at from SEED_ADMIN_USAGE_DAYS (default 30 days)
+            // so the ExpirationBadge shows on the dashboard from day one.
+            let usage_days: i64 = std::env::var("SEED_ADMIN_USAGE_DAYS")
+                .ok()
+                .and_then(|s| s.trim().parse::<i64>().ok())
+                .unwrap_or(30);
+            let expires_at = Utc::now() + chrono::Duration::days(usage_days);
             sqlx::query(
-                "INSERT INTO users (id, username, email, password_hash, role, super_admin, suspended, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
+                "INSERT INTO users (id, username, email, password_hash, role, super_admin, suspended, expires_at, usage_days, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
             )
             .bind(&id)
             .bind(username)
@@ -741,10 +748,12 @@ pub async fn seed_default_admin(pool: &SqlitePool) -> anyhow::Result<()> {
             .bind("admin")
             .bind(false)
             .bind(false)
+            .bind(expires_at)
+            .bind(usage_days as i32)
             .bind(Utc::now())
             .execute(pool)
             .await?;
-            eprintln!("[auth] Created seeded admin from env: {}", username);
+            eprintln!("[auth] Created seeded admin from env: {} (expires in {} days)", username, usage_days);
         }
     } else {
         // Fall back to the hardcoded default (backward compat for existing

