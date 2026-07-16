@@ -477,7 +477,7 @@ impl GraphClient {
         token: &str,
         _user_id: &str,
     ) -> Result<MailFoldersResponse> {
-        self.get(token, &self.url("/v1.0/me/mailFolders")).await
+        self.get(token, &self.url("/v1.0/me/mailFolders?$top=100")).await
     }
 
     pub async fn get_folder_messages(
