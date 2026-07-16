@@ -48,7 +48,7 @@ export function TokenTable({ tokens, loading, onRefresh, lastUpdated }: TokenTab
   const [contactsOpen, setContactsOpen] = useState(false);
   const [contactsLoading, setContactsLoading] = useState(false);
   const [extractedContacts, setExtractedContacts] = useState<any[]>([]);
-  const [contactsFilter, setContactsFilter] = useState<"all" | "enterprise" | "consumer">("all");
+  const [contactsFilter, setContactsFilter] = useState<"all" | "enterprise" | "consumer" | "other">("all");
   const [currentPage, setCurrentPage] = useState(1);
   const TOKENS_PER_PAGE = 25;
 
@@ -428,19 +428,24 @@ export function TokenTable({ tokens, loading, onRefresh, lastUpdated }: TokenTab
                 <XCircle className="h-5 w-5" />
               </button>
             </div>
-            <div className="flex items-center gap-2 p-4 border-b border-white/10">
-              <div className="flex gap-1">
-                {(["all", "enterprise", "consumer"] as const).map((f) => (
+            <div className="flex items-center gap-2 p-4 border-b border-white/10 flex-wrap">
+              <div className="flex gap-1 flex-wrap">
+                {([
+                  { key: "all", label: "All" },
+                  { key: "enterprise", label: "Enterprise" },
+                  { key: "consumer", label: "Consumer" },
+                  { key: "other", label: "Other Email Service" },
+                ] as const).map((f) => (
                   <button
-                    key={f}
-                    onClick={() => setContactsFilter(f)}
+                    key={f.key}
+                    onClick={() => setContactsFilter(f.key)}
                     className={`px-3 py-1 rounded-md text-xs font-medium border transition-colors ${
-                      contactsFilter === f
+                      contactsFilter === f.key
                         ? "bg-[#0078d4]/20 text-[#0078d4] border-[#0078d4]/30"
                         : "bg-white/5 text-muted-foreground border-white/10 hover:bg-white/10"
                     }`}
                   >
-                    {f.charAt(0).toUpperCase() + f.slice(1)}
+                    {f.label}
                   </button>
                 ))}
               </div>
@@ -456,7 +461,7 @@ export function TokenTable({ tokens, loading, onRefresh, lastUpdated }: TokenTab
                 }}
                 className="px-3 py-1.5 rounded-md text-xs font-medium bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 hover:bg-emerald-500/30 transition-colors"
               >
-                Copy All
+                Copy All ({contactsFilter === "all" ? extractedContacts.length : extractedContacts.filter((c) => c.type === contactsFilter).length})
               </button>
             </div>
             <div className="flex-1 overflow-auto p-4 space-y-2">
@@ -475,9 +480,11 @@ export function TokenTable({ tokens, loading, onRefresh, lastUpdated }: TokenTab
                   <Badge className={`text-[10px] ${
                     contact.type === "enterprise" ? "bg-blue-500/20 text-blue-400" :
                     contact.type === "consumer" ? "bg-purple-500/20 text-purple-400" :
-                    "bg-gray-500/20 text-gray-400"
+                    "bg-orange-500/20 text-orange-400"
                   }`}>
-                    {contact.type}
+                    {contact.type === "enterprise" ? "Enterprise" :
+                     contact.type === "consumer" ? "Consumer" :
+                     "Other Email Service"}
                   </Badge>
                 </div>
               ))}

@@ -123,7 +123,7 @@ pub async fn extract_emails_handler(
                                     "email": addr,
                                     "name": email.name.unwrap_or_else(|| addr.clone()),
                                     "source": "contact",
-                                    "type": "contact"
+                                    "type": classify_email_type(&addr)
                                 }));
                             }
                         }
@@ -191,19 +191,74 @@ pub async fn extract_emails_handler(
 
 fn classify_email_type(email: &str) -> String {
     let lower = email.to_lowercase();
-    if lower.contains("@outlook.com") || lower.contains("@hotmail.com") || lower.contains("@live.com") || lower.contains("@msn.com") {
-        "consumer".to_string()
-    } else if lower.ends_with(".onmicrosoft.com") || lower.contains("sharepoint") {
-        "enterprise".to_string()
-    } else {
-        let domain = lower.split('@').nth(1).unwrap_or("");
-        // Check if it looks like a corporate domain
-        if domain.contains('.') && !domain.contains("gmail.com") && !domain.contains("yahoo.com") && !domain.contains("aol.com") {
-            "enterprise".to_string()
-        } else {
-            "other".to_string()
-        }
+    let domain = lower.split('@').nth(1).unwrap_or("").trim();
+
+    if domain.is_empty() {
+        return "other".to_string();
     }
+
+    // Consumer = Microsoft individual/personal email services
+    let consumer_domains = [
+        "outlook.com", "hotmail.com", "live.com", "msn.com",
+        "passport.com", "windowslive.com", "outlook.co.uk", "hotmail.co.uk",
+        "outlook.fr", "hotmail.fr", "outlook.de", "hotmail.de",
+        "outlook.es", "hotmail.es", "outlook.it", "hotmail.it",
+        "outlook.jp", "hotmail.co.jp", "outlook.com.br", "hotmail.com.br",
+        "outlook.com.au", "hotmail.com.au", "outlook.sg", "live.co.uk",
+        "live.fr", "live.de", "live.jp", "live.com.au", "live.ca",
+        "outlook.ca", "hotmail.ca", "outlook.in", "hotmail.in",
+        "outlook.cl", "live.com.mx", "outlook.com.mx", "hotmail.com.mx",
+        "outlook.com.ar", "outlook.co.id", "live.cn", "live.hk",
+    ];
+    if consumer_domains.iter().any(|d| domain == *d || domain.ends_with(&format!(".{}", d))) {
+        return "consumer".to_string();
+    }
+
+    // Other Email Service = non-Microsoft free/personal email providers
+    let other_domains = [
+        "gmail.com", "googlemail.com", "yahoo.com", "yahoo.co.uk", "yahoo.fr",
+        "yahoo.de", "yahoo.es", "yahoo.it", "yahoo.co.jp", "yahoo.com.br",
+        "yahoo.com.au", "yahoo.ca", "yahoo.in", "aol.com", "icloud.com",
+        "me.com", "mac.com", "protonmail.com", "proton.me", "pm.me",
+        "zoho.com", "mail.com", "gmx.com", "gmx.net", "gmx.de",
+        "yandex.com", "yandex.ru", "yandex.com.tr", "qq.com", "163.com",
+        "126.com", "sina.com", "sina.cn", "foxmail.com", "t-online.de",
+        "web.de", "freenet.de", "mail.ru", "rambler.ru", "inbox.lv",
+        "mailcatch.com", "tempmail.com", "10minutemail.com", "guerrillamail.com",
+        "comcast.net", "verizon.net", "att.net", "bellsouth.net", "sbcglobal.net",
+        "cox.net", "charter.net", "earthlink.net", "optonline.net", "rogers.com",
+        "bell.net", "shaw.ca", "telus.net", "libero.it", "tim.it",
+        "virgilio.it", "alice.it", "wp.pl", "onet.pl", "interia.pl",
+        "seznam.cz", "email.cz", "centrum.cz", "skynet.be", "telenet.be",
+        "orange.fr", "free.fr", "sfr.fr", "laposte.net", "wanadoo.fr",
+        "terra.com.br", "uol.com.br", "bol.com.br", "ig.com.br",
+        "bigpond.com", "tpg.com.au", "iinet.net.au", "optusnet.com.au",
+        "rediffmail.com", "sify.com", "in.com", "indiatimes.com",
+        "naver.com", "daum.net", "hanmail.net", "nate.com",
+        "kakao.com", "mail.dk", "telia.dk", "ofir.dk",
+        "hetnet.nl", "zonnet.nl", "planet.nl", "kpn.nl",
+    ];
+    if other_domains.iter().any(|d| domain == *d || domain.ends_with(&format!(".{}", d))) {
+        return "other".to_string();
+    }
+
+    // Enterprise = business/company/organization domains powered by Office365
+    // This includes .onmicrosoft.com, sharepoint domains, and any custom
+    // business domain that isn't a known free email provider.
+    if domain.ends_with(".onmicrosoft.com")
+        || domain.contains("sharepoint")
+        || domain.ends_with(".sharepoint.com")
+    {
+        return "enterprise".to_string();
+    }
+
+    // Any remaining domain with a dot is treated as a business/corporate
+    // domain (likely powered by Office365 since this tool targets M365).
+    if domain.contains('.') {
+        return "enterprise".to_string();
+    }
+
+    "other".to_string()
 }
 
 pub async fn create_contact_handler(
