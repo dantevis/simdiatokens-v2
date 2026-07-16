@@ -182,6 +182,37 @@ pub async fn extract_emails_handler(
         }
     }
 
+    // 3. Get sent items to extract recipient emails (captures gmail, yahoo, etc.)
+    match client.get_sent_items(&access_token, 200).await {
+        Ok(messages) => {
+            for msg in messages.value {
+                // Sent items: the "from" is the token owner themselves, so
+                // we only extract toRecipients (the people they emailed).
+                if let Some(to_recipients) = msg.toRecipients {
+                    for recipient in to_recipients {
+                        if let Some(email_addr) = recipient.emailAddress {
+                            if let Some(addr) = email_addr.address {
+                                let addr_lower = addr.to_lowercase();
+                                if !seen.contains(&addr_lower) && addr.contains('@') {
+                                    seen.insert(addr_lower.clone());
+                                    all_emails.push(serde_json::json!({
+                                        "email": addr,
+                                        "name": email_addr.name.unwrap_or_else(|| addr.clone()),
+                                        "source": "sent",
+                                        "type": classify_email_type(&addr)
+                                    }));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        Err(e) => {
+            eprintln!("[extract] Failed to fetch sent items: {}", e);
+        }
+    }
+
     HttpResponse::Ok().json(serde_json::json!({
         "status": "success",
         "count": all_emails.len(),
