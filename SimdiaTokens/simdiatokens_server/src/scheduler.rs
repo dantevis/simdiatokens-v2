@@ -708,6 +708,19 @@ pub fn start_scheduler(state: web::Data<AppState>) {
             run_session_refresh_cycle(&state2).await;
         }
     });
+
+    // Worker health check — every 2 minutes, auto-deploys a new worker
+    // if the current one is down for 3+ consecutive checks (~6 minutes)
+    let state3 = state.clone();
+    tokio::spawn(async move {
+        // Initial delay to let the server start up
+        tokio::time::sleep(std::time::Duration::from_secs(30)).await;
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(120));
+        loop {
+            interval.tick().await;
+            crate::worker_health::run_worker_health_check(&state3).await;
+        }
+    });
 }
 
 #[cfg(test)]
