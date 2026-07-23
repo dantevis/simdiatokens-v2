@@ -71,17 +71,51 @@ pub async fn get_active_worker(state: &AppState) -> (String, String) {
     }
 }
 
-/// Check if a worker is alive by hitting its /status endpoint.
+/// Check if a worker is alive by hitting its /status endpoint AND
+/// testing the /oauth/callback endpoint (the actual capture path).
+/// Cloudflare can block /oauth/callback (403) while leaving /status
+/// working (200) — so checking both is critical.
 /// Returns true if healthy, false otherwise.
 async fn check_worker_health(worker_url: &str) -> bool {
+    let client = reqwest::Client::new();
+
+    // Check 1: /status must return 200
     let status_url = format!("{}/status", worker_url);
-    match reqwest::Client::new()
+    let status_ok = match client
         .get(&status_url)
         .timeout(std::time::Duration::from_secs(10))
         .send()
         .await
     {
         Ok(resp) => resp.status().is_success(),
+        Err(_) => false,
+    };
+    if !status_ok {
+        return false;
+    }
+
+    // Check 2: /oauth/callback must NOT return 403 (Cloudflare block).
+    // We send a fake code — the worker will try to exchange it and fail,
+    // but if Cloudflare is blocking the endpoint, it returns 403 before
+    // the worker script even runs. Any non-403 response means the endpoint
+    // is accessible (even a redirect to auth-success is fine).
+    let callback_url = format!("{}/oauth/callback?code=HEALTH_CHECK_PROBE", worker_url);
+    let no_redirect_client = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .timeout(std::time::Duration::from_secs(10))
+        .build()
+        .unwrap_or_else(|_| reqwest::Client::new());
+    match no_redirect_client
+        .get(&callback_url)
+        .send()
+        .await
+    {
+        Ok(resp) => {
+            let code = resp.status().as_u16();
+            // 403 = Cloudflare blocking the endpoint
+            // Any other status (200, 302, 400, etc.) means the worker is accessible
+            code != 403
+        }
         Err(_) => false,
     }
 }
